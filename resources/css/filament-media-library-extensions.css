@@ -1,0 +1,16 @@
+/* Drag-and-drop highlight for media library drop zones. */
+
+[data-mle-dropzone] {
+    position: relative;
+}
+
+[data-mle-dropzone].mle-dropzone-active::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 40;
+    pointer-events: none;
+    border: 2px dashed var(--primary-500, #3b82f6);
+    border-radius: 0.75rem;
+    background-color: color-mix(in srgb, var(--primary-500, #3b82f6) 10%, transparent);
+}
