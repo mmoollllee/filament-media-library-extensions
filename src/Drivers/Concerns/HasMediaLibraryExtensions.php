@@ -57,7 +57,7 @@ trait HasMediaLibraryExtensions
         }
 
         return new ActionsCollection($actions
-            ->map(function (Action | ActionGroup $action): Action | ActionGroup {
+            ->map(function (Action|ActionGroup $action): Action|ActionGroup {
                 if ($action instanceof PreviewAction && ! $action instanceof MediaPickerPreviewAction) {
                     return MediaPickerPreviewAction::make()->driver($this);
                 }
