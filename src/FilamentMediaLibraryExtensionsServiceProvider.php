@@ -14,10 +14,12 @@ use Mmoollllee\FilamentMediaLibraryExtensions\Filament\Actions\MediaPickerPrevie
 use Mmoollllee\FilamentMediaLibraryExtensions\Filament\Actions\MediaPickerUploadAction;
 use Mmoollllee\FilamentMediaLibraryExtensions\Filament\Actions\ProcessInlineUploadsAction;
 use Mmoollllee\FilamentMediaLibraryExtensions\Support\CreatedFilesCollector;
+use Mmoollllee\FilamentMediaLibraryExtensions\Support\PickerUploads;
 use RalphJSmit\Filament\Explore\Data\FileData;
 use RalphJSmit\Filament\Explore\Enums\FileType;
 use RalphJSmit\Filament\Explore\Filament\Actions\SelectFileAction;
 use RalphJSmit\Filament\Explore\Filament\Actions\UploadAction;
+use RalphJSmit\Filament\Explore\Filament\Forms\Components\FilePicker;
 use RalphJSmit\Filament\MediaLibrary\Filament\Actions\SelectMediaAction;
 use RalphJSmit\Filament\MediaLibrary\Filament\Forms\Components\MediaPicker;
 
@@ -95,7 +97,11 @@ class FilamentMediaLibraryExtensionsServiceProvider extends ServiceProvider
      * Every upload action (field, selection modal topbar, media library page)
      * gets the trigger marker the drop zone script clicks, its modal becomes
      * a drop target itself, and uploads inside a selection modal are
-     * auto-added to the modal's selection.
+     * auto-added to the modal's selection. With `inline_upload` enabled the
+     * button click is taken over client-side: inside a selection modal it
+     * opens the native file dialog and uploads inline (FilePond stays
+     * untouched as the no-JS/server fallback); elsewhere (e.g. the media
+     * library page) the JS falls back to mounting the original modal.
      */
     protected function configureUploadAction(): void
     {
@@ -109,6 +115,17 @@ class FilamentMediaLibraryExtensionsServiceProvider extends ServiceProvider
             if ($action instanceof MediaPickerUploadAction) {
                 // The field action merges uploads into the field state itself.
                 return;
+            }
+
+            if (
+                config('filament-media-library-extensions.inline_upload')
+                && config('filament-media-library-extensions.upload_button')
+            ) {
+                $action
+                    ->alpineClickHandler('window.mleUploadTriggerClicked($event)')
+                    ->extraAttributes(fn (UploadAction $action): array => [
+                        'data-mle-mount-context' => json_encode($action->getContext()),
+                    ], merge: true);
             }
 
             $action->after(function (UploadAction $action): void {
@@ -164,17 +181,41 @@ class FilamentMediaLibraryExtensionsServiceProvider extends ServiceProvider
     }
 
     /**
-     * The selection modal window becomes a drop target: dropped files open the
-     * topbar upload action and land in its FilePond field.
+     * The selection modal window becomes a drop target. With `inline_upload`
+     * enabled it carries the inline upload config (pending path, process
+     * action context, accepted types of the owning picker): drops and the
+     * topbar button then upload inline with progress tiles instead of
+     * opening the FilePond modal — including drops onto folder tiles,
+     * which target that subfolder.
      */
     protected function configureSelectMediaAction(): void
     {
         SelectMediaAction::configureUsing(function (SelectMediaAction $action): void {
-            if (! config('filament-media-library-extensions.dropzone')) {
-                return;
+            if (config('filament-media-library-extensions.dropzone')) {
+                $action->extraModalWindowAttributes(['data-mle-dropzone' => 'select-modal'], merge: true);
             }
 
-            $action->extraModalWindowAttributes(['data-mle-dropzone' => 'select-modal'], merge: true);
+            if (
+                config('filament-media-library-extensions.inline_upload')
+                && config('filament-media-library-extensions.upload_button')
+            ) {
+                $action->extraModalWindowAttributes(function (SelectMediaAction $action): array {
+                    $picker = $action->getSchemaComponent();
+
+                    if (! $picker instanceof FilePicker) {
+                        return [];
+                    }
+
+                    return [
+                        'data-mle-inline-modal' => json_encode([
+                            'uploadPath' => PickerUploads::pendingUploadsStatePath($picker),
+                            'processName' => ProcessInlineUploadsAction::getDefaultName(),
+                            'processContext' => ['schemaComponent' => $picker->getKey()],
+                            'accept' => $picker->getAcceptedFileTypes()->implode(','),
+                        ]),
+                    ];
+                }, merge: true);
+            }
         });
     }
 }

@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Mmoollllee\FilamentMediaLibraryExtensions\Filament\Actions;
 
 use Filament\Notifications\Notification;
-use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Number;
 use Illuminate\Support\Str;
@@ -15,18 +14,24 @@ use RalphJSmit\Filament\Explore\Authorization\FileAbility;
 use RalphJSmit\Filament\Explore\Data\TemporaryFileUploadData;
 use RalphJSmit\Filament\Explore\Enums\FileType;
 use RalphJSmit\Filament\Explore\Filament\Actions\Action;
+use RalphJSmit\Filament\Explore\Filament\Actions\SelectFileAction;
 use RalphJSmit\Filament\Explore\Filament\Forms\Components\FilePicker;
 
 /**
  * Modal-less picker action consuming the pending inline uploads.
  *
- * The field's JS uploads dropped/picked files via Livewire's upload API into
- * the picker's pending-uploads state path and then mounts this action. It
+ * The picker's JS uploads dropped/picked files via Livewire's upload API into
+ * the picker's pending-uploads state path and then mounts this action — from
+ * the field itself or nested inside the picker's selection modal. It
  * authorizes against the driver, validates each file against the field's
  * accepted types and the driver's max file size (the FileUpload rules of the
- * modal path do not run here), stores valid files via `Driver::createFile()`
- * and merges them into the picker selection. It is never rendered as a
- * button, so all safety checks live inside the action itself.
+ * FilePond path do not run here), stores valid files via `Driver::createFile()`
+ * and selects them: in the field state, or in the selection modal's selection
+ * when one is mounted. An optional `folderKey` argument targets a drop-target
+ * subfolder — resolved through the driver's scoped `findFile()` (visibility)
+ * and constrained to the picker's scoped folder; otherwise files land in the
+ * modal's current folder or the picker's scoped/default folder. It is never
+ * rendered as a button, so all safety checks live inside the action itself.
  */
 class ProcessInlineUploadsAction extends Action
 {
@@ -39,23 +44,49 @@ class ProcessInlineUploadsAction extends Action
     {
         parent::setUp();
 
-        $this->action(function (FilePicker $component, self $action): void {
+        $this->action(function (FilePicker $component, self $action, array $arguments): void {
             $livewire = $action->getLivewire();
-            $pendingUploadsStatePath = PickerUploads::pendingUploadsStatePath($component);
 
-            $pendingUploads = collect(Arr::wrap(data_get($livewire, $pendingUploadsStatePath)))
-                ->filter(fn (mixed $file): bool => $file instanceof TemporaryUploadedFile);
-
-            data_set($livewire, $pendingUploadsStatePath, []);
+            $pendingUploads = PickerUploads::consumePendingUploads(
+                $livewire,
+                PickerUploads::pendingUploadsStatePath($component),
+            );
 
             if ($pendingUploads->isEmpty()) {
                 return;
             }
 
             $driver = $component->getDriver();
-            $folder = $component->getScopedFolder() ?? $component->getDefaultFolder();
 
-            if (! $driver->authorize(FileAbility::Create, FileType::File, $folder)->allowed()) {
+            $mountedActions = $livewire->getMountedActions();
+            $parentActionNestingIndex = count($mountedActions) - 2;
+            $parentSelectAction = ($mountedActions[$parentActionNestingIndex] ?? null) instanceof SelectFileAction
+                ? $mountedActions[$parentActionNestingIndex]
+                : null;
+
+            $scopedFolder = $component->getScopedFolder();
+            $targetFolder = $scopedFolder ?? $component->getDefaultFolder();
+
+            if ($parentSelectAction) {
+                $currentFolderKey = data_get($livewire, "mountedActions.{$parentActionNestingIndex}.data.files.folder_key");
+                $currentFolder = $currentFolderKey ? $driver->findFile(FileType::Folder, $currentFolderKey) : null;
+
+                if ($currentFolder && PickerUploads::folderIsWithinScope($currentFolder, $scopedFolder)) {
+                    $targetFolder = $currentFolder;
+                }
+            }
+
+            $argumentFolderKey = $arguments['folderKey'] ?? null;
+
+            if (filled($argumentFolderKey) && is_string($argumentFolderKey)) {
+                $argumentFolder = $driver->findFile(FileType::Folder, $argumentFolderKey);
+
+                if ($argumentFolder && PickerUploads::folderIsWithinScope($argumentFolder, $scopedFolder)) {
+                    $targetFolder = $argumentFolder;
+                }
+            }
+
+            if (! $driver->authorize(FileAbility::Create, FileType::File, $targetFolder)->allowed()) {
                 $pendingUploads->each(fn (TemporaryUploadedFile $file) => $file->delete());
 
                 Notification::make()
@@ -95,12 +126,16 @@ class ProcessInlineUploadsAction extends Action
                 }
 
                 $createdFiles->push($driver->createFile(
-                    folder: $folder,
+                    folder: $targetFolder,
                     temporaryFileUploadData: TemporaryFileUploadData::fromUploadedFile($file),
                 ));
             }
 
-            PickerUploads::mergeCreatedFilesIntoState($component, $createdFiles);
+            if ($parentSelectAction) {
+                PickerUploads::mergeCreatedFilesIntoModalSelection($livewire, $parentActionNestingIndex, $parentSelectAction, $createdFiles);
+            } else {
+                PickerUploads::mergeCreatedFilesIntoState($component, $createdFiles);
+            }
 
             if ($createdFiles->isNotEmpty()) {
                 Notification::make()
@@ -118,6 +153,9 @@ class ProcessInlineUploadsAction extends Action
         });
     }
 
+    /**
+     * @param  Collection<int, string>  $acceptedFileTypes
+     */
     protected static function matchesAcceptedFileTypes(TemporaryUploadedFile $file, Collection $acceptedFileTypes): bool
     {
         if ($acceptedFileTypes->isEmpty()) {
