@@ -184,18 +184,47 @@
         const anchorTile = scope.querySelector(FILE_TILE_SELECTOR)
 
         if (anchorTile) {
-            // Only a DIRECT `.fi-grid-col` parent is the tile's grid cell (modal
-            // file groups wrap tiles in one) — `closest()` would escape into a
-            // surrounding form grid column on picker fields, where tiles sit
-            // directly in the sortable schema.
-            const gridCell = anchorTile.parentElement?.matches(GRID_COLUMN_SELECTOR)
-                ? anchorTile.parentElement
-                : anchorTile
+            if (anchorTile.querySelector(ROW_MARKER_SELECTOR)) {
+                // List rows stack in a block container — append next to the
+                // row's direct cell (`.fi-grid-col` wrapper, if any).
+                const rowCell = anchorTile.parentElement?.matches(GRID_COLUMN_SELECTOR)
+                    ? anchorTile.parentElement
+                    : anchorTile
 
-            if (gridCell.parentElement) {
+                if (rowCell.parentElement) {
+                    return {
+                        parent: rowCell.parentElement,
+                        mode: 'row',
+                        cellClassName: rowCell === anchorTile ? null : rowCell.className,
+                    }
+                }
+            }
+
+            // Grid tiles sit (possibly wrapped) inside the nearest
+            // `display: grid` ancestor — the ghost must become a sibling GRID
+            // CHILD of the cell containing the anchor tile, cloning that
+            // cell's classes, so it occupies its own cell in every browser.
+            let gridContainer = anchorTile.parentElement
+
+            while (
+                gridContainer &&
+                gridContainer !== scope &&
+                getComputedStyle(gridContainer).display !== 'grid'
+            ) {
+                gridContainer = gridContainer.parentElement
+            }
+
+            if (gridContainer && gridContainer !== scope && getComputedStyle(gridContainer).display === 'grid') {
+                let gridCell = anchorTile
+
+                while (gridCell.parentElement !== gridContainer) {
+                    gridCell = gridCell.parentElement
+                }
+
                 return {
-                    parent: gridCell.parentElement,
-                    mode: anchorTile.querySelector(ROW_MARKER_SELECTOR) ? 'row' : 'grid',
+                    parent: gridContainer,
+                    mode: 'grid',
+                    cellClassName: gridCell === anchorTile ? null : gridCell.className,
                 }
             }
         }
@@ -254,13 +283,18 @@
     // Mimics the real tile markup (same utility classes as the vendor views):
     // image uploads show a local preview with the vendor's gradient caption,
     // other files get the icon-style card; rows mirror the list layout.
-    const renderGhostContent = (entry, mode) => {
-        entry.mode = mode
-        entry.element.className = `mle-ghost-tile mle-ghost-tile--${mode}`
+    const renderGhostContent = (entry, container) => {
+        const { mode, cellClassName } = container
+
+        entry.element.className = [cellClassName ?? '', 'mle-ghost-tile', `mle-ghost-tile--${mode}`]
+            .filter(Boolean)
+            .join(' ')
         entry.element.replaceChildren()
 
         if (mode === 'row') {
-            entry.element.classList.add('flex', 'flex-row', 'items-center', 'w-full', 'h-12', 'border-gray-200', 'dark:border-white/5')
+            const row = document.createElement('div')
+            row.className = 'flex flex-row items-center w-full h-12 border-gray-200 dark:border-white/5'
+            entry.element.appendChild(row)
 
             const selectionSpacer = document.createElement('div')
             selectionSpacer.className = 'mle-ghost-row-spacer'
@@ -294,13 +328,10 @@
             progressElement.appendChild(document.createElement('div'))
             progressCell.appendChild(progressElement)
 
-            entry.element.append(selectionSpacer, thumbnailCell, nameCell, progressCell)
+            row.append(selectionSpacer, thumbnailCell, nameCell, progressCell)
 
             return
         }
-
-        const square = document.createElement('div')
-        square.className = 'relative aspect-square'
 
         const card = document.createElement('div')
         card.className = 'size-full bg-white dark:bg-gray-900 shadow-sm rounded-lg'
@@ -330,19 +361,30 @@
         }
 
         card.appendChild(cardContent)
-        square.appendChild(card)
-        entry.element.appendChild(square)
+
+        // Field tiles ARE the square cell; modal cells and fallback hosts
+        // need the tile's inner square wrapper.
+        if (entry.element.classList.contains('aspect-square')) {
+            entry.element.appendChild(card)
+        } else {
+            const square = document.createElement('div')
+            square.className = 'relative aspect-square'
+            square.appendChild(card)
+            entry.element.appendChild(square)
+        }
     }
 
     const attachGhost = (entry) => {
-        const { parent, mode } = resolveGhostContainer(entry.scope)
+        const container = resolveGhostContainer(entry.scope)
+        const containerSignature = `${container.mode}|${container.cellClassName ?? ''}`
 
-        if (entry.mode !== mode) {
-            renderGhostContent(entry, mode)
+        if (entry.containerSignature !== containerSignature) {
+            entry.containerSignature = containerSignature
+            renderGhostContent(entry, container)
         }
 
         // Always show uploads last, regardless of the list's sort order.
-        parent.appendChild(entry.element)
+        container.parent.appendChild(entry.element)
     }
 
     const addGhost = (scope, uuid, file) => {
@@ -355,7 +397,7 @@
             scope,
             name: file.name,
             objectUrl: file.type?.startsWith('image/') ? URL.createObjectURL(file) : null,
-            mode: null,
+            containerSignature: null,
         }
 
         ghostRegistry.set(uuid, entry)

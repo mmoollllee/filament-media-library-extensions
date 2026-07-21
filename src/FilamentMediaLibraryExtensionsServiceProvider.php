@@ -6,13 +6,13 @@ namespace Mmoollllee\FilamentMediaLibraryExtensions;
 
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Utilities\Set;
-use Filament\Support\Assets\Css;
-use Filament\Support\Assets\Js;
 use Filament\Support\Facades\FilamentAsset;
 use Illuminate\Support\ServiceProvider;
 use Mmoollllee\FilamentMediaLibraryExtensions\Filament\Actions\MediaPickerPreviewAction;
 use Mmoollllee\FilamentMediaLibraryExtensions\Filament\Actions\MediaPickerUploadAction;
 use Mmoollllee\FilamentMediaLibraryExtensions\Filament\Actions\ProcessInlineUploadsAction;
+use Mmoollllee\FilamentMediaLibraryExtensions\Support\Assets\ContentVersionedCss;
+use Mmoollllee\FilamentMediaLibraryExtensions\Support\Assets\ContentVersionedJs;
 use Mmoollllee\FilamentMediaLibraryExtensions\Support\CreatedFilesCollector;
 use Mmoollllee\FilamentMediaLibraryExtensions\Support\PickerUploads;
 use RalphJSmit\Filament\Explore\Data\FileData;
@@ -47,8 +47,8 @@ class FilamentMediaLibraryExtensionsServiceProvider extends ServiceProvider
         }
 
         FilamentAsset::register([
-            Js::make('filament-media-library-extensions', __DIR__.'/../resources/js/filament-media-library-extensions.js'),
-            Css::make('filament-media-library-extensions', __DIR__.'/../resources/css/filament-media-library-extensions.css'),
+            ContentVersionedJs::make('filament-media-library-extensions', __DIR__.'/../resources/js/filament-media-library-extensions.js'),
+            ContentVersionedCss::make('filament-media-library-extensions', __DIR__.'/../resources/css/filament-media-library-extensions.css'),
         ], package: 'mmoollllee/filament-media-library-extensions');
 
         $this->configureMediaPicker();
