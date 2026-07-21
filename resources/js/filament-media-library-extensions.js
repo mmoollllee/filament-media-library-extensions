@@ -45,6 +45,7 @@
     const POND_POLL_INTERVAL_MS = 150
     const POND_POLL_TIMEOUT_MS = 10000
     const ERRORED_UPLOAD_HIDE_AFTER_MS = 8000
+    const UPLOAD_STALL_TIMEOUT_MS = 90000
 
     const randomUuid = () => crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
 
@@ -183,7 +184,13 @@
         const anchorTile = scope.querySelector(FILE_TILE_SELECTOR)
 
         if (anchorTile) {
-            const gridCell = anchorTile.closest(GRID_COLUMN_SELECTOR) ?? anchorTile
+            // Only a DIRECT `.fi-grid-col` parent is the tile's grid cell (modal
+            // file groups wrap tiles in one) — `closest()` would escape into a
+            // surrounding form grid column on picker fields, where tiles sit
+            // directly in the sortable schema.
+            const gridCell = anchorTile.parentElement?.matches(GRID_COLUMN_SELECTOR)
+                ? anchorTile.parentElement
+                : anchorTile
 
             if (gridCell.parentElement) {
                 return {
@@ -458,22 +465,44 @@
 
             addGhost(scope, uuid, file)
 
+            // Livewire does not always fire the error callback (e.g. when the
+            // finish roundtrip dies) — a stall watchdog keeps ghosts and the
+            // batch from hanging forever.
+            let isSettled = false
+            let stallTimer = null
+
+            const settleOnce = (onSettle) => {
+                if (isSettled) {
+                    return
+                }
+
+                isSettled = true
+                clearTimeout(stallTimer)
+                onSettle()
+                settle()
+            }
+
+            const restartStallTimer = () => {
+                if (isSettled) {
+                    return
+                }
+
+                clearTimeout(stallTimer)
+                stallTimer = setTimeout(() => settleOnce(() => ghostErrored(uuid)), UPLOAD_STALL_TIMEOUT_MS)
+            }
+
+            restartStallTimer()
+
             wire.upload(
                 `${config.uploadPath}.${uuid}`,
                 file,
-                () => {
-                    ghostProgress(uuid, 100)
-                    settle()
+                () => settleOnce(() => ghostProgress(uuid, 100)),
+                () => settleOnce(() => ghostErrored(uuid)),
+                (event) => {
+                    restartStallTimer()
+                    ghostProgress(uuid, event.detail.progress)
                 },
-                () => {
-                    ghostErrored(uuid)
-                    settle()
-                },
-                (event) => ghostProgress(uuid, event.detail.progress),
-                () => {
-                    removeGhost(uuid)
-                    settle()
-                },
+                () => settleOnce(() => removeGhost(uuid)),
             )
         })
     }
