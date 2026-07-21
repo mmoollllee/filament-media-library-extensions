@@ -4,9 +4,8 @@ declare(strict_types=1);
 
 namespace Mmoollllee\FilamentMediaLibraryExtensions\Filament\Actions;
 
-use Illuminate\Support\Arr;
 use Mmoollllee\FilamentMediaLibraryExtensions\Support\CreatedFilesCollector;
-use RalphJSmit\Filament\Explore\Data\FileData;
+use Mmoollllee\FilamentMediaLibraryExtensions\Support\PickerUploads;
 use RalphJSmit\Filament\Explore\Filament\Actions\UploadAction;
 use RalphJSmit\Filament\Explore\Filament\Forms\Components\FilePicker;
 
@@ -32,31 +31,10 @@ class MediaPickerUploadAction extends UploadAction
                     return;
                 }
 
-                $createdFiles = app(CreatedFilesCollector::class)->consume();
-
-                if ($createdFiles->isEmpty()) {
-                    return;
-                }
-
-                if (! $component->isMultiple()) {
-                    $component->state($createdFiles->first()->getKey());
-                    $component->callAfterStateUpdated();
-
-                    return;
-                }
-
-                $state = collect(Arr::wrap($component->getState()))
-                    ->map(fn (mixed $key): string => (string) $key)
-                    ->concat($createdFiles->map(fn (FileData $file): string => $file->getKey()))
-                    ->unique()
-                    ->values();
-
-                if ($maxFiles = $component->getMaxFiles()) {
-                    $state = $state->take($maxFiles);
-                }
-
-                $component->state($state->all());
-                $component->callAfterStateUpdated();
+                PickerUploads::mergeCreatedFilesIntoState(
+                    $component,
+                    app(CreatedFilesCollector::class)->consume(),
+                );
             });
     }
 }

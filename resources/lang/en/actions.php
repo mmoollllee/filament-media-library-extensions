@@ -10,4 +10,11 @@ return [
         'previous_label' => 'Previous',
         'next_label' => 'Next',
     ],
+    'inline_upload' => [
+        'failed' => 'Upload failed',
+        'unauthorized' => 'You are not allowed to upload files.',
+        'rejected_type' => ':name: file type not allowed.',
+        'rejected_size' => ':name: file too large (max. :max).',
+        'uploaded' => '1 file uploaded|:count files uploaded',
+    ],
 ];

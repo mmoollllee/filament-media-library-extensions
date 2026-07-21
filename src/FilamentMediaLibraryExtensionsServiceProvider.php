@@ -12,6 +12,7 @@ use Filament\Support\Facades\FilamentAsset;
 use Illuminate\Support\ServiceProvider;
 use Mmoollllee\FilamentMediaLibraryExtensions\Filament\Actions\MediaPickerPreviewAction;
 use Mmoollllee\FilamentMediaLibraryExtensions\Filament\Actions\MediaPickerUploadAction;
+use Mmoollllee\FilamentMediaLibraryExtensions\Filament\Actions\ProcessInlineUploadsAction;
 use Mmoollllee\FilamentMediaLibraryExtensions\Support\CreatedFilesCollector;
 use RalphJSmit\Filament\Explore\Data\FileData;
 use RalphJSmit\Filament\Explore\Enums\FileType;
@@ -66,15 +67,22 @@ class FilamentMediaLibraryExtensionsServiceProvider extends ServiceProvider
             }
 
             if (config('filament-media-library-extensions.upload_button')) {
-                $component
-                    ->view('filament-media-library-extensions::filament.forms.components.media-picker')
-                    ->registerActions([
+                $component->view('filament-media-library-extensions::filament.forms.components.media-picker');
+
+                if (config('filament-media-library-extensions.inline_upload')) {
+                    $component->registerActions([
+                        fn (MediaPicker $component): ProcessInlineUploadsAction => ProcessInlineUploadsAction::make()
+                            ->driver(fn () => $component->getDriver()),
+                    ]);
+                } else {
+                    $component->registerActions([
                         fn (MediaPicker $component): MediaPickerUploadAction => MediaPickerUploadAction::make()
                             ->driver(fn () => $component->getDriver())
                             ->folder(fn (): ?FileData => $component->getScopedFolder() ?? $component->getDefaultFolder())
                             ->acceptedFileTypes(fn () => $component->getAcceptedFileTypes())
                             ->visible(fn (): bool => ! $component->isDisabled()),
                     ]);
+                }
 
                 if (config('filament-media-library-extensions.dropzone')) {
                     $component->extraAttributes(['data-mle-dropzone' => 'media-picker'], merge: true);

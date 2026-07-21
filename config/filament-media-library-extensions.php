@@ -13,6 +13,18 @@ return [
     'upload_button' => true,
 
     /*
+     * Uploads directly on the MediaPicker field bypass the FilePond modal
+     * entirely: the "Upload files" button opens the native file dialog,
+     * dropped/picked files upload via Livewire's JS upload API with inline
+     * progress tiles, and a modal-less picker action validates, stores
+     * (driver `createFile()`) and selects them. Freshly uploaded files are
+     * always selected on this path (that is its purpose) — `auto_select_uploads`
+     * only governs the FilePond modal paths. Requires `upload_button`;
+     * set to `false` to fall back to the FilePond upload modal on the field.
+     */
+    'inline_upload' => true,
+
+    /*
      * Turns the MediaPicker field, the file selection modal, and the upload modal
      * into drag-and-drop targets. Dropped files are handed to the original
      * upload modal's FilePond instance, so validation, progress and error

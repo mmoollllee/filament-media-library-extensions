@@ -16,10 +16,88 @@
 
     const ZONE_SELECTOR = '[data-mle-dropzone]'
     const TRIGGER_SELECTOR = '[data-mle-upload-trigger]'
+    const INLINE_UPLOADER_SELECTOR = '[data-mle-inline-upload]'
     const POND_BROWSER_SELECTOR = 'input[type="file"].filepond--browser'
     const ACTIVE_CLASS = 'mle-dropzone-active'
     const POND_POLL_INTERVAL_MS = 150
     const POND_POLL_TIMEOUT_MS = 10000
+    const ERRORED_UPLOAD_HIDE_AFTER_MS = 8000
+
+    // Alpine component for the inline upload on MediaPicker fields: dropped or
+    // picked files upload straight through Livewire's JS upload API (one call
+    // per file, so each tile gets its own progress), and once no upload is
+    // pending anymore, the picker's modal-less `process_inline_uploads`
+    // action validates, stores and selects them server-side.
+    window.mleInlineUploader = ({ statePath, processContext }) => ({
+        uploads: [],
+        pendingCount: 0,
+
+        queueFiles(files) {
+            Array.from(files ?? []).forEach((file) => this.uploadFile(file))
+        },
+
+        uploadFile(file) {
+            const uuid = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
+
+            this.uploads.push({ uuid, name: file.name, progress: 0, error: false })
+            this.pendingCount++
+
+            this.$wire.upload(
+                `${statePath}.${uuid}`,
+                file,
+                () => this.finishUpload(uuid, false),
+                () => this.finishUpload(uuid, true),
+                (event) => {
+                    const upload = this.uploads.find((candidate) => candidate.uuid === uuid)
+
+                    if (upload) {
+                        upload.progress = event.detail.progress
+                    }
+                },
+                () => this.discardUpload(uuid),
+            )
+        },
+
+        finishUpload(uuid, errored) {
+            const upload = this.uploads.find((candidate) => candidate.uuid === uuid)
+
+            if (upload) {
+                upload.progress = 100
+                upload.error = errored
+            }
+
+            if (errored) {
+                setTimeout(() => this.discardUpload(uuid, false), ERRORED_UPLOAD_HIDE_AFTER_MS)
+            }
+
+            this.settle()
+        },
+
+        discardUpload(uuid, isPending = true) {
+            this.uploads = this.uploads.filter((candidate) => candidate.uuid !== uuid)
+
+            if (isPending) {
+                this.settle()
+            }
+        },
+
+        settle() {
+            this.pendingCount--
+
+            if (this.pendingCount <= 0) {
+                this.pendingCount = 0
+                this.processUploads()
+            }
+        },
+
+        async processUploads() {
+            await this.$wire.mountAction('process_inline_uploads', {}, processContext)
+
+            // Keep errored tiles visible (they auto-hide), drop finished ones —
+            // the processed files re-render as regular picker tiles.
+            this.uploads = this.uploads.filter((candidate) => candidate.error)
+        },
+    })
 
     let pondPollTimer = null
 
@@ -34,9 +112,13 @@
             return null
         }
 
-        // A zone is only actionable when it can receive uploads right now:
-        // either a FilePond field is visible or an upload action exists.
-        if (!zone.querySelector(POND_BROWSER_SELECTOR) && !zone.querySelector(TRIGGER_SELECTOR)) {
+        // A zone is only actionable when it can receive uploads right now: an
+        // inline uploader, a visible FilePond field, or an upload action.
+        if (
+            !zone.querySelector(INLINE_UPLOADER_SELECTOR) &&
+            !zone.querySelector(POND_BROWSER_SELECTOR) &&
+            !zone.querySelector(TRIGGER_SELECTOR)
+        ) {
             return null
         }
 
@@ -135,7 +217,16 @@
             return
         }
 
-        // The upload modal itself (or an already open FilePond) takes the
+        // Fields with the inline uploader take the files without any modal ...
+        const inlineUploader = zone.querySelector(INLINE_UPLOADER_SELECTOR)
+
+        if (inlineUploader) {
+            inlineUploader.dispatchEvent(new CustomEvent('mle-upload-files', { detail: { files } }))
+
+            return
+        }
+
+        // ... the upload modal itself (or an already open FilePond) takes the
         // files directly ...
         const pondInput = zone.querySelector(POND_BROWSER_SELECTOR)
 
