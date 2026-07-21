@@ -144,28 +144,29 @@
     const wireFromElement = (element) => {
         const livewireElement = element.closest('[wire\\:id]')
 
-        if (!livewireElement || !window.Livewire) {
+        if (!livewireElement) {
             return null
         }
 
-        const component = window.Livewire.find(livewireElement.getAttribute('wire:id'))
-
-        return component?.$wire ?? component ?? null
+        // `Livewire.find()` returns the component's `$wire` proxy directly.
+        return window.Livewire?.find?.(livewireElement.getAttribute('wire:id')) ?? null
     }
 
-    const inlineModalConfigFromZone = (zone) => {
-        const rawConfig = zone.getAttribute(MODAL_CONFIG_ATTRIBUTE)
-
-        if (!rawConfig) {
+    // Config attributes are base64-encoded JSON, because Filament renders
+    // extra (modal window) attributes unescaped.
+    const decodeJsonAttribute = (rawValue) => {
+        if (!rawValue) {
             return null
         }
 
         try {
-            return JSON.parse(rawConfig)
+            return JSON.parse(atob(rawValue))
         } catch {
             return null
         }
     }
+
+    const inlineModalConfigFromZone = (zone) => decodeJsonAttribute(zone.getAttribute(MODAL_CONFIG_ATTRIBUTE))
 
     const zoneFromEvent = (event) => {
         const target = event.target instanceof Element ? event.target : null
@@ -398,13 +399,7 @@
             return
         }
 
-        let mountContext = {}
-
-        try {
-            mountContext = JSON.parse(trigger.getAttribute(MOUNT_CONTEXT_ATTRIBUTE) ?? '{}')
-        } catch {
-            //
-        }
+        const mountContext = decodeJsonAttribute(trigger.getAttribute(MOUNT_CONTEXT_ATTRIBUTE)) ?? {}
 
         wireFromElement(trigger)?.mountAction('upload', {}, mountContext)
     }

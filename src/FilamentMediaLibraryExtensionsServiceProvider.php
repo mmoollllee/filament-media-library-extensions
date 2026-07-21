@@ -123,8 +123,10 @@ class FilamentMediaLibraryExtensionsServiceProvider extends ServiceProvider
             ) {
                 $action
                     ->alpineClickHandler('window.mleUploadTriggerClicked($event)')
+                    // Base64: extra attributes render unescaped — raw JSON
+                    // quotes would tear the attribute apart.
                     ->extraAttributes(fn (UploadAction $action): array => [
-                        'data-mle-mount-context' => json_encode($action->getContext()),
+                        'data-mle-mount-context' => base64_encode(json_encode($action->getContext())),
                     ], merge: true);
             }
 
@@ -206,13 +208,15 @@ class FilamentMediaLibraryExtensionsServiceProvider extends ServiceProvider
                         return [];
                     }
 
+                    // Base64: modal window attributes render unescaped — raw
+                    // JSON quotes would tear the attribute apart.
                     return [
-                        'data-mle-inline-modal' => json_encode([
+                        'data-mle-inline-modal' => base64_encode(json_encode([
                             'uploadPath' => PickerUploads::pendingUploadsStatePath($picker),
                             'processName' => ProcessInlineUploadsAction::getDefaultName(),
                             'processContext' => ['schemaComponent' => $picker->getKey()],
                             'accept' => $picker->getAcceptedFileTypes()->implode(','),
-                        ]),
+                        ])),
                     ];
                 }, merge: true);
             }
