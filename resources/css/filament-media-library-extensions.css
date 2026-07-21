@@ -23,26 +23,72 @@
     border-radius: 0.75rem;
 }
 
-/* Fixed overlay panel listing inline uploads started from a modal. */
+/*
+ * Ghost tiles: placeholder cards/rows with a progress bar, rendered directly
+ * inside the file grid (`--grid`), the file list (`--row`), or a fallback
+ * host container (`--card`) while a file uploads.
+ */
 
-.mle-upload-panel {
-    position: fixed;
-    right: 1rem;
-    bottom: 1rem;
-    z-index: 9999;
+.mle-ghost-tile {
+    position: relative;
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
-    width: 16rem;
-    max-width: calc(100vw - 2rem);
+    justify-content: flex-end;
+    gap: 0.375rem;
+    min-width: 0;
 }
 
-.mle-upload-panel .mle-inline-upload {
-    width: 100%;
-    box-shadow: 0 4px 12px 0 rgb(0 0 0 / 0.15);
+.mle-ghost-tile--grid,
+.mle-ghost-tile--card {
+    aspect-ratio: 1 / 1;
+    padding: 0.75rem;
+    border-radius: 0.5rem;
+    background-color: #fff;
+    box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+    outline: 1px dashed var(--gray-400, #9ca3af);
+    outline-offset: -1px;
 }
 
-/* Inline upload progress tiles on MediaPicker fields. */
+.dark .mle-ghost-tile--grid,
+.dark .mle-ghost-tile--card {
+    background-color: var(--gray-900, #111827);
+    outline-color: var(--gray-600, #4b5563);
+}
+
+.mle-ghost-tile--card {
+    width: 8rem;
+}
+
+.mle-ghost-tile--row {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.75rem;
+    height: 3rem;
+    padding: 0 1rem;
+}
+
+.mle-ghost-tile--row .mle-inline-upload-name {
+    flex: 1 1 auto;
+}
+
+.mle-ghost-tile--row .mle-inline-upload-progress {
+    flex: none;
+    width: 8rem;
+}
+
+.mle-ghost-tile.mle-inline-upload-errored {
+    outline-color: var(--danger-400, #f87171);
+}
+
+.mle-ghost-tile.mle-inline-upload-errored .mle-inline-upload-name {
+    color: var(--danger-600, #dc2626);
+}
+
+.mle-ghost-tile.mle-inline-upload-errored .mle-inline-upload-progress > div {
+    background-color: var(--danger-500, #ef4444);
+}
+
+/* Fallback host (field-rendered or dynamically created) for ghost tiles. */
 
 .mle-inline-uploads {
     display: flex;
@@ -50,27 +96,11 @@
     gap: 0.75rem;
 }
 
-.mle-inline-upload {
-    display: flex;
-    flex-direction: column;
-    gap: 0.375rem;
-    width: 12rem;
-    max-width: 100%;
-    padding: 0.625rem 0.75rem;
-    border: 1px solid var(--gray-200, #e5e7eb);
-    border-radius: 0.5rem;
-    background-color: #fff;
-    box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+.mle-inline-uploads:empty {
+    display: none;
 }
 
-.dark .mle-inline-upload {
-    border-color: var(--gray-700, #374151);
-    background-color: var(--gray-900, #111827);
-}
-
-.mle-inline-upload-errored {
-    border-color: var(--danger-400, #f87171);
-}
+/* Shared ghost tile internals. */
 
 .mle-inline-upload-name {
     overflow: hidden;
@@ -82,11 +112,6 @@
 
 .dark .mle-inline-upload-name {
     color: var(--gray-300, #d1d5db);
-}
-
-.mle-inline-upload-error {
-    font-size: 0.75rem;
-    color: var(--danger-600, #dc2626);
 }
 
 .mle-inline-upload-progress {
@@ -102,6 +127,7 @@
 
 .mle-inline-upload-progress > div {
     height: 100%;
+    width: 0%;
     border-radius: 9999px;
     background-color: var(--primary-500, #3b82f6);
     transition: width 150ms ease-out;

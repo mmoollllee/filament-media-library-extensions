@@ -6,6 +6,9 @@
 --}}
 @php
     use Illuminate\View\ComponentAttributeBag;
+    use Mmoollllee\FilamentMediaLibraryExtensions\Filament\Actions\ProcessInlineUploadsAction;
+    use Mmoollllee\FilamentMediaLibraryExtensions\Support\PickerUploads;
+    use RalphJSmit\Filament\Explore\Authorization\FileAbility;
     use RalphJSmit\Filament\Explore\Enums\FileType;
     use RalphJSmit\Filament\Explore\Filament\Schemas\Components\File\Version;
 @endphp
@@ -21,6 +24,27 @@
         $isReorderable = $isReorderable();
         $isMultiple = $isMultiple();
         $isDisabled = $isDisabled();
+
+        $mleInlineFieldConfig = null;
+
+        if (
+            config('filament-media-library-extensions.inline_upload')
+            && config('filament-media-library-extensions.upload_button')
+            && ! $isDisabled
+            && $field
+                ->getDriver()
+                ->authorize(FileAbility::Create, FileType::File, $field->getScopedFolder() ?? $field->getDefaultFolder())
+                ->allowed()
+        ) {
+            // Base64: extra attributes render unescaped — raw JSON quotes
+            // would tear the attribute apart.
+            $mleInlineFieldConfig = base64_encode(json_encode([
+                'uploadPath' => PickerUploads::pendingUploadsStatePath($field),
+                'processName' => ProcessInlineUploadsAction::getDefaultName(),
+                'processContext' => ['schemaComponent' => $field->getKey()],
+                'accept' => $getAcceptedFileTypes()->implode(','),
+            ]));
+        }
     @endphp
     <div
         wire:ignore.self
@@ -32,7 +56,7 @@
             key: {{ \Illuminate\Support\Js::from($key) }},
             isBulkSelectable: {{ \Illuminate\Support\Js::from($isBulkSelectable) }},
         })"
-        {{ $getExtraAttributeBag() }}
+        {{ $getExtraAttributeBag()->merge(filled($mleInlineFieldConfig) ? ['data-mle-inline-field' => $mleInlineFieldConfig] : []) }}
     >
         @if ($isBulkSelectable && $state)
             <div class="flex flex-row flex-wrap items-center justify-between gap-y-1">
@@ -162,91 +186,32 @@
             $selectFileAction = $getAction('select_file');
             $uploadAction = $getAction('upload');
             $clearAction = $getAction('clear');
-
-            $mleCanUploadInline = false;
-
-            if (
-                config('filament-media-library-extensions.inline_upload')
-                && config('filament-media-library-extensions.upload_button')
-                && ! $isDisabled
-            ) {
-                $mleCanUploadInline = $field
-                    ->getDriver()
-                    ->authorize(
-                        \RalphJSmit\Filament\Explore\Authorization\FileAbility::Create,
-                        FileType::File,
-                        $field->getScopedFolder() ?? $field->getDefaultFolder(),
-                    )
-                    ->allowed();
-            }
         @endphp
 
-        @if ($mleCanUploadInline)
+        @if (filled($mleInlineFieldConfig))
+            {{-- Fallback host for upload ghost tiles when the picker shows no files yet. --}}
             <div
-                x-data="mleInlineUploader({
-                    statePath: {{ \Illuminate\Support\Js::from(\Mmoollllee\FilamentMediaLibraryExtensions\Support\PickerUploads::pendingUploadsStatePath($field)) }},
-                    processContext: {{ \Illuminate\Support\Js::from(['schemaComponent' => $field->getKey()]) }},
-                })"
-                data-mle-inline-upload
-                x-on:mle-upload-files.stop="queueFiles($event.detail.files)"
-            >
-                <input
-                    type="file"
-                    multiple
-                    class="hidden"
-                    x-ref="mleUploadInput"
-                    @if (($mleAcceptedFileTypes = $getAcceptedFileTypes()->implode(',')) !== '') accept="{{ $mleAcceptedFileTypes }}" @endif
-                    x-on:change="queueFiles($event.target.files); $event.target.value = ''"
-                />
+                class="mle-inline-uploads mt-4"
+                data-mle-ghost-fallback
+                wire:ignore
+            ></div>
 
-                <div
-                    class="mle-inline-uploads mt-4"
-                    x-show="uploads.length"
-                    x-cloak
+            <div class="mt-4 flex flex-row gap-4">
+                @if ($selectFileAction->isVisible())
+                    {{ $selectFileAction }}
+                @endif
+
+                <x-filament::button
+                    color="gray"
+                    type="button"
+                    data-mle-inline-open
                 >
-                    <template x-for="upload in uploads" :key="upload.uuid">
-                        <div
-                            class="mle-inline-upload"
-                            x-bind:class="upload.error && 'mle-inline-upload-errored'"
-                        >
-                            <span
-                                class="mle-inline-upload-name"
-                                x-text="upload.name"
-                            ></span>
-                            <span
-                                class="mle-inline-upload-error"
-                                x-show="upload.error"
-                                x-cloak
-                            >
-                                {{ __('filament-media-library-extensions::actions.inline_upload.failed') }}
-                            </span>
-                            <div
-                                class="mle-inline-upload-progress"
-                                x-show="! upload.error"
-                            >
-                                <div x-bind:style="'width: ' + upload.progress + '%'"></div>
-                            </div>
-                        </div>
-                    </template>
-                </div>
+                    {{ __('filament-media-library-extensions::actions.media_picker_upload.label') }}
+                </x-filament::button>
 
-                <div class="mt-4 flex flex-row gap-4">
-                    @if ($selectFileAction->isVisible())
-                        {{ $selectFileAction }}
-                    @endif
-
-                    <x-filament::button
-                        color="gray"
-                        type="button"
-                        x-on:click="$refs.mleUploadInput.click()"
-                    >
-                        {{ __('filament-media-library-extensions::actions.media_picker_upload.label') }}
-                    </x-filament::button>
-
-                    @if ($clearAction->isVisible())
-                        {{ $clearAction }}
-                    @endif
-                </div>
+                @if ($clearAction->isVisible())
+                    {{ $clearAction }}
+                @endif
             </div>
         @else
             <div class="mt-4 flex flex-row gap-4">

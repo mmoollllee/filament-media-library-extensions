@@ -3,14 +3,15 @@
 // Elements marked with `data-mle-dropzone` (MediaPicker fields, the selection
 // modal, the upload modal) accept dropped files:
 //
-// - MediaPicker fields render their own inline uploader (`mleInlineUploader`
-//   Alpine component) with per-file progress tiles.
-// - Selection modals carrying a `data-mle-inline-modal` config upload inline
-//   too: files go through Livewire's upload API into the picker's pending
-//   path, a fixed overlay panel shows per-file progress, and the picker's
-//   modal-less `process_inline_uploads` action stores and selects them.
-//   Drops onto a folder tile target that subfolder. The topbar upload
-//   button opens the native file dialog for the same flow.
+// - Zones carrying an inline upload config (`data-mle-inline-field` on the
+//   picker, `data-mle-inline-modal` on the selection modal window) upload
+//   through Livewire's upload API — one call per file. While uploading,
+//   ghost cards/rows with a progress bar render directly inside the file
+//   grid/list (protected from Livewire morphs), falling back to a dedicated
+//   host container when no file list is visible. Afterwards the picker's
+//   modal-less `process_inline_uploads` action validates, stores and selects
+//   the files server-side. Drops onto a folder tile target that subfolder;
+//   the upload buttons open the native file dialog for the same flow.
 // - Zones without an inline config (e.g. the media library page) fall back
 //   to the original FilePond modal: the upload action is opened and the
 //   files are injected into its FilePond browse input.
@@ -26,94 +27,26 @@
 
     const ZONE_SELECTOR = '[data-mle-dropzone]'
     const TRIGGER_SELECTOR = '[data-mle-upload-trigger]'
-    const INLINE_UPLOADER_SELECTOR = '[data-mle-inline-upload]'
+    const OPEN_DIALOG_SELECTOR = '[data-mle-inline-open]'
     const POND_BROWSER_SELECTOR = 'input[type="file"].filepond--browser'
+    const FILE_TILE_SELECTOR = '[data-file-key]'
     const FOLDER_TILE_SELECTOR = '[data-file-type="folder"][data-file-key]'
+    const GRID_COLUMN_SELECTOR = '.fi-grid-col'
+    const ROW_MARKER_SELECTOR = '.fi-rjs-explore-file-row'
+    const EMPTY_STATE_SELECTOR = '.fi-rjs-explore-empty-state'
+    const FALLBACK_CONTAINER_SELECTOR = '[data-mle-ghost-fallback]'
     const MODAL_CONFIG_ATTRIBUTE = 'data-mle-inline-modal'
+    const FIELD_CONFIG_ATTRIBUTE = 'data-mle-inline-field'
     const MOUNT_CONTEXT_ATTRIBUTE = 'data-mle-mount-context'
+    const GHOST_ATTRIBUTE = 'data-mle-upload-ghost'
     const ACTIVE_CLASS = 'mle-dropzone-active'
     const FOLDER_ACTIVE_CLASS = 'mle-folder-dropzone-active'
+    const ERRORED_CLASS = 'mle-inline-upload-errored'
     const POND_POLL_INTERVAL_MS = 150
     const POND_POLL_TIMEOUT_MS = 10000
     const ERRORED_UPLOAD_HIDE_AFTER_MS = 8000
 
     const randomUuid = () => crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
-
-    // Alpine component for the inline upload on MediaPicker fields: dropped or
-    // picked files upload straight through Livewire's JS upload API (one call
-    // per file, so each tile gets its own progress), and once no upload is
-    // pending anymore, the picker's modal-less `process_inline_uploads`
-    // action validates, stores and selects them server-side.
-    window.mleInlineUploader = ({ statePath, processContext }) => ({
-        uploads: [],
-        pendingCount: 0,
-
-        queueFiles(files) {
-            Array.from(files ?? []).forEach((file) => this.uploadFile(file))
-        },
-
-        uploadFile(file) {
-            const uuid = randomUuid()
-
-            this.uploads.push({ uuid, name: file.name, progress: 0, error: false })
-            this.pendingCount++
-
-            this.$wire.upload(
-                `${statePath}.${uuid}`,
-                file,
-                () => this.finishUpload(uuid, false),
-                () => this.finishUpload(uuid, true),
-                (event) => {
-                    const upload = this.uploads.find((candidate) => candidate.uuid === uuid)
-
-                    if (upload) {
-                        upload.progress = event.detail.progress
-                    }
-                },
-                () => this.discardUpload(uuid),
-            )
-        },
-
-        finishUpload(uuid, errored) {
-            const upload = this.uploads.find((candidate) => candidate.uuid === uuid)
-
-            if (upload) {
-                upload.progress = 100
-                upload.error = errored
-            }
-
-            if (errored) {
-                setTimeout(() => this.discardUpload(uuid, false), ERRORED_UPLOAD_HIDE_AFTER_MS)
-            }
-
-            this.settle()
-        },
-
-        discardUpload(uuid, isPending = true) {
-            this.uploads = this.uploads.filter((candidate) => candidate.uuid !== uuid)
-
-            if (isPending) {
-                this.settle()
-            }
-        },
-
-        settle() {
-            this.pendingCount--
-
-            if (this.pendingCount <= 0) {
-                this.pendingCount = 0
-                this.processUploads()
-            }
-        },
-
-        async processUploads() {
-            await this.$wire.mountAction('process_inline_uploads', {}, processContext)
-
-            // Keep errored tiles visible (they auto-hide), drop finished ones —
-            // the processed files re-render as regular picker tiles.
-            this.uploads = this.uploads.filter((candidate) => candidate.error)
-        },
-    })
 
     // ---------------------------------------------------------------- helpers
 
@@ -166,7 +99,9 @@
         }
     }
 
-    const inlineModalConfigFromZone = (zone) => decodeJsonAttribute(zone.getAttribute(MODAL_CONFIG_ATTRIBUTE))
+    const inlineConfigFromZone = (zone) =>
+        decodeJsonAttribute(zone.getAttribute(MODAL_CONFIG_ATTRIBUTE))
+            ?? decodeJsonAttribute(zone.getAttribute(FIELD_CONFIG_ATTRIBUTE))
 
     const zoneFromEvent = (event) => {
         const target = event.target instanceof Element ? event.target : null
@@ -177,11 +112,10 @@
         }
 
         // A zone is only actionable when it can receive uploads right now: an
-        // inline upload config or uploader, a visible FilePond field, or an
-        // upload action to open.
+        // inline upload config, a visible FilePond field, or an upload
+        // action to open.
         if (
-            !inlineModalConfigFromZone(zone) &&
-            !zone.querySelector(INLINE_UPLOADER_SELECTOR) &&
+            !inlineConfigFromZone(zone) &&
             !zone.querySelector(POND_BROWSER_SELECTOR) &&
             !zone.querySelector(TRIGGER_SELECTOR)
         ) {
@@ -192,7 +126,7 @@
     }
 
     const folderTileFromEvent = (event, zone) => {
-        if (!inlineModalConfigFromZone(zone)) {
+        if (!inlineConfigFromZone(zone)) {
             return null
         }
 
@@ -219,80 +153,169 @@
         setActiveFolderTile(null)
     }
 
-    // ------------------------------------- inline upload panel (modal / page)
+    // ----------------------------------------------------------- ghost tiles
+    //
+    // Placeholder cards/rows rendered directly inside the file grid/list
+    // while a file uploads. Livewire re-renders (morphs) the list on every
+    // finished upload, so ghosts are protected via the `morph.removing`
+    // hook and re-attached whenever they get disconnected (e.g. after
+    // navigating to another folder mid-upload).
 
-    const uploadPanel = {
-        element: null,
+    const ghostRegistry = new Map()
 
-        ensure() {
-            if (this.element?.isConnected) {
-                return this.element
-            }
-
-            this.element = document.createElement('div')
-            this.element.className = 'mle-upload-panel'
-            document.body.appendChild(this.element)
-
-            return this.element
-        },
-
-        add(uuid, name) {
-            const tile = document.createElement('div')
-            tile.className = 'mle-inline-upload'
-            tile.dataset.mleUploadUuid = uuid
-
-            const nameElement = document.createElement('span')
-            nameElement.className = 'mle-inline-upload-name'
-            nameElement.textContent = name
-
-            const progressElement = document.createElement('div')
-            progressElement.className = 'mle-inline-upload-progress'
-            progressElement.appendChild(document.createElement('div'))
-
-            tile.append(nameElement, progressElement)
-            this.ensure().appendChild(tile)
-        },
-
-        tile(uuid) {
-            return this.element?.querySelector(`[data-mle-upload-uuid="${uuid}"]`) ?? null
-        },
-
-        setProgress(uuid, progress) {
-            const bar = this.tile(uuid)?.querySelector('.mle-inline-upload-progress > div')
-
-            if (bar) {
-                bar.style.width = `${progress}%`
-            }
-        },
-
-        setErrored(uuid) {
-            this.tile(uuid)?.classList.add('mle-inline-upload-errored')
-
-            setTimeout(() => this.remove(uuid), ERRORED_UPLOAD_HIDE_AFTER_MS)
-        },
-
-        remove(uuid) {
-            this.tile(uuid)?.remove()
-            this.cleanup()
-        },
-
-        clearFinished() {
-            this.element
-                ?.querySelectorAll('[data-mle-upload-uuid]:not(.mle-inline-upload-errored)')
-                .forEach((tile) => tile.remove())
-
-            this.cleanup()
-        },
-
-        cleanup() {
-            if (this.element && !this.element.childElementCount) {
-                this.element.remove()
-                this.element = null
-            }
-        },
+    const onLivewireReady = (callback) => {
+        window.Livewire ? callback() : document.addEventListener('livewire:init', callback)
     }
 
-    const startInlineUploads = (wire, config, files, folderKey = null) => {
+    onLivewireReady(() => {
+        window.Livewire.hook?.('morph.removing', ({ el, skip }) => {
+            if (el instanceof Element && el.hasAttribute(GHOST_ATTRIBUTE)) {
+                skip()
+            }
+        })
+    })
+
+    const resolveGhostContainer = (scope) => {
+        if (!scope.isConnected) {
+            scope = document.querySelector(ZONE_SELECTOR) ?? document.body
+        }
+
+        const anchorTile = scope.querySelector(FILE_TILE_SELECTOR)
+
+        if (anchorTile) {
+            const gridCell = anchorTile.closest(GRID_COLUMN_SELECTOR) ?? anchorTile
+
+            if (gridCell.parentElement) {
+                return {
+                    parent: gridCell.parentElement,
+                    mode: anchorTile.querySelector(ROW_MARKER_SELECTOR) ? 'row' : 'grid',
+                    prepend: true,
+                }
+            }
+        }
+
+        const fallbackContainer = scope.querySelector(FALLBACK_CONTAINER_SELECTOR)
+
+        if (fallbackContainer) {
+            return { parent: fallbackContainer, mode: 'card', prepend: false }
+        }
+
+        let dynamicContainer = scope.querySelector(`.mle-inline-uploads[${GHOST_ATTRIBUTE}]`)
+
+        if (!dynamicContainer) {
+            dynamicContainer = document.createElement('div')
+            dynamicContainer.className = 'mle-inline-uploads'
+            dynamicContainer.setAttribute(GHOST_ATTRIBUTE, 'container')
+
+            const emptyState = scope.querySelector(EMPTY_STATE_SELECTOR)
+
+            if (emptyState?.parentElement) {
+                emptyState.parentElement.insertBefore(dynamicContainer, emptyState)
+            } else {
+                scope.appendChild(dynamicContainer)
+            }
+        }
+
+        return { parent: dynamicContainer, mode: 'card', prepend: false }
+    }
+
+    const attachGhost = (entry) => {
+        const { parent, mode, prepend } = resolveGhostContainer(entry.scope)
+
+        entry.element.classList.remove('mle-ghost-tile--grid', 'mle-ghost-tile--row', 'mle-ghost-tile--card')
+        entry.element.classList.add(`mle-ghost-tile--${mode}`)
+
+        prepend && parent.firstElementChild
+            ? parent.insertBefore(entry.element, parent.firstElementChild)
+            : parent.appendChild(entry.element)
+    }
+
+    const addGhost = (scope, uuid, name) => {
+        const element = document.createElement('div')
+        element.className = 'mle-ghost-tile'
+        element.setAttribute(GHOST_ATTRIBUTE, uuid)
+        element.setAttribute('wire:ignore', '')
+
+        const nameElement = document.createElement('span')
+        nameElement.className = 'mle-inline-upload-name'
+        nameElement.textContent = name
+
+        const progressElement = document.createElement('div')
+        progressElement.className = 'mle-inline-upload-progress'
+        progressElement.appendChild(document.createElement('div'))
+
+        element.append(nameElement, progressElement)
+
+        const entry = { element, scope }
+        ghostRegistry.set(uuid, entry)
+        attachGhost(entry)
+    }
+
+    const ensureGhostAttached = (entry) => {
+        if (!entry.element.isConnected) {
+            attachGhost(entry)
+        }
+    }
+
+    const ghostProgress = (uuid, progress) => {
+        const entry = ghostRegistry.get(uuid)
+
+        if (!entry) {
+            return
+        }
+
+        ensureGhostAttached(entry)
+
+        const bar = entry.element.querySelector('.mle-inline-upload-progress > div')
+
+        if (bar) {
+            bar.style.width = `${progress}%`
+        }
+    }
+
+    const ghostErrored = (uuid) => {
+        const entry = ghostRegistry.get(uuid)
+
+        if (!entry) {
+            return
+        }
+
+        ensureGhostAttached(entry)
+        entry.element.classList.add(ERRORED_CLASS)
+
+        setTimeout(() => removeGhost(uuid), ERRORED_UPLOAD_HIDE_AFTER_MS)
+    }
+
+    const removeGhost = (uuid) => {
+        ghostRegistry.get(uuid)?.element.remove()
+        ghostRegistry.delete(uuid)
+        cleanupGhostContainers()
+    }
+
+    const clearFinishedGhosts = () => {
+        ghostRegistry.forEach((entry, uuid) => {
+            if (!entry.element.classList.contains(ERRORED_CLASS)) {
+                entry.element.remove()
+                ghostRegistry.delete(uuid)
+            }
+        })
+
+        cleanupGhostContainers()
+    }
+
+    const cleanupGhostContainers = () => {
+        document
+            .querySelectorAll(`.mle-inline-uploads[${GHOST_ATTRIBUTE}]`)
+            .forEach((container) => {
+                if (!container.childElementCount) {
+                    container.remove()
+                }
+            })
+    }
+
+    // ---------------------------------------------------------- upload engine
+
+    const startInlineUploads = (wire, config, files, { folderKey = null, scope }) => {
         if (!wire || !config?.uploadPath || !config?.processName || !files.length) {
             return
         }
@@ -310,28 +333,28 @@
                 config.processName,
                 folderKey ? { folderKey } : {},
                 config.processContext ?? {},
-            )).then(() => uploadPanel.clearFinished())
+            )).then(() => clearFinishedGhosts())
         }
 
         files.forEach((file) => {
             const uuid = randomUuid()
 
-            uploadPanel.add(uuid, file.name)
+            addGhost(scope, uuid, file.name)
 
             wire.upload(
                 `${config.uploadPath}.${uuid}`,
                 file,
                 () => {
-                    uploadPanel.setProgress(uuid, 100)
+                    ghostProgress(uuid, 100)
                     settle()
                 },
                 () => {
-                    uploadPanel.setErrored(uuid)
+                    ghostErrored(uuid)
                     settle()
                 },
-                (event) => uploadPanel.setProgress(uuid, event.detail.progress),
+                (event) => ghostProgress(uuid, event.detail.progress),
                 () => {
-                    uploadPanel.remove(uuid)
+                    removeGhost(uuid)
                     settle()
                 },
             )
@@ -361,13 +384,43 @@
                 input.value = ''
 
                 if (context && files.length) {
-                    startInlineUploads(context.wire, context.config, files)
+                    startInlineUploads(context.wire, context.config, files, { scope: context.scope })
                 }
             })
         }
 
         return input
     }
+
+    const openInlineUploadDialog = (wire, config, scope) => {
+        if (!wire) {
+            return
+        }
+
+        dialogUploadContext = { wire, config, scope }
+
+        const input = dialogInput()
+        input.accept = config.accept ?? ''
+        input.click()
+    }
+
+    // The field's upload button opens the native dialog for its zone.
+    document.addEventListener('click', (event) => {
+        const opener = event.target instanceof Element ? event.target.closest(OPEN_DIALOG_SELECTOR) : null
+
+        if (!opener) {
+            return
+        }
+
+        const zone = opener.closest(ZONE_SELECTOR)
+        const config = zone ? inlineConfigFromZone(zone) : null
+
+        if (!config) {
+            return
+        }
+
+        openInlineUploadDialog(wireFromElement(opener), config, zone)
+    })
 
     // Click handler for upload action buttons when inline uploads are
     // enabled: inside a zone with an inline config the native file dialog
@@ -381,20 +434,10 @@
         }
 
         const zone = trigger.closest(ZONE_SELECTOR)
-        const config = zone ? inlineModalConfigFromZone(zone) : null
+        const config = zone ? inlineConfigFromZone(zone) : null
 
         if (config) {
-            const wire = wireFromElement(trigger)
-
-            if (!wire) {
-                return
-            }
-
-            dialogUploadContext = { wire, config }
-
-            const input = dialogInput()
-            input.accept = config.accept ?? ''
-            input.click()
+            openInlineUploadDialog(wireFromElement(trigger), config, zone)
 
             return
         }
@@ -507,26 +550,15 @@
             return
         }
 
-        // Selection modals with an inline config upload without any FilePond
-        // modal — drops onto a folder tile target that subfolder ...
-        const inlineModalConfig = inlineModalConfigFromZone(zone)
+        // Zones with an inline config upload without any FilePond modal —
+        // drops onto a folder tile target that subfolder ...
+        const inlineConfig = inlineConfigFromZone(zone)
 
-        if (inlineModalConfig) {
-            startInlineUploads(
-                wireFromElement(zone),
-                inlineModalConfig,
-                files,
-                folderTile?.getAttribute('data-file-key') ?? null,
-            )
-
-            return
-        }
-
-        // ... fields with the inline uploader take the files without any modal ...
-        const inlineUploader = zone.querySelector(INLINE_UPLOADER_SELECTOR)
-
-        if (inlineUploader) {
-            inlineUploader.dispatchEvent(new CustomEvent('mle-upload-files', { detail: { files } }))
+        if (inlineConfig) {
+            startInlineUploads(wireFromElement(zone), inlineConfig, files, {
+                folderKey: folderTile?.getAttribute('data-file-key') ?? null,
+                scope: zone,
+            })
 
             return
         }
