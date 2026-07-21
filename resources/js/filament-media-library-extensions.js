@@ -459,14 +459,28 @@
         cleanupGhostContainers()
     }
 
-    const clearFinishedGhosts = () => {
-        ghostRegistry.forEach((entry, uuid) => {
-            if (!entry.element.classList.contains(ERRORED_CLASS)) {
-                discardGhostEntry(uuid, entry)
-            }
-        })
+    // Move an errored ghost out of the (morphed) file grid into a safe host:
+    // the field's server-rendered `wire:ignore` fallback host, or a floating
+    // body-level host as last resort. Any foreign node left inside the grid
+    // would keep Livewire's morph from applying re-rendered tiles.
+    const relocateErroredGhost = (entry) => {
+        let host = entry.scope.isConnected ? entry.scope.querySelector(FALLBACK_CONTAINER_SELECTOR) : null
 
-        cleanupGhostContainers()
+        if (!host) {
+            host = document.querySelector('.mle-inline-uploads--floating')
+
+            if (!host) {
+                host = document.createElement('div')
+                host.className = 'mle-inline-uploads mle-inline-uploads--floating'
+                host.setAttribute(GHOST_ATTRIBUTE, 'container')
+                document.body.appendChild(host)
+            }
+        }
+
+        entry.containerSignature = 'card|'
+        renderGhostContent(entry, { mode: 'card', cellClassName: null })
+        entry.element.classList.add(ERRORED_CLASS)
+        host.appendChild(entry.element)
     }
 
     const cleanupGhostContainers = () => {
@@ -487,6 +501,7 @@
         }
 
         let pendingCount = files.length
+        const batchGhostUuids = []
 
         const settle = () => {
             pendingCount--
@@ -495,16 +510,41 @@
                 return
             }
 
+            // Clear the grid BEFORE the process roundtrip: any leftover
+            // foreign node inside the tile grid keeps Livewire's morph from
+            // applying the re-rendered tiles (the fresh tile would only show
+            // up after the next full render). Finished ghosts are removed —
+            // their real tiles are about to morph in — and errored ones
+            // (auto-hiding, no incoming tile) relocate to a safe host.
+            batchGhostUuids.forEach((ghostUuid) => {
+                const entry = ghostRegistry.get(ghostUuid)
+
+                if (!entry) {
+                    return
+                }
+
+                if (entry.element.classList.contains(ERRORED_CLASS)) {
+                    relocateErroredGhost(entry)
+
+                    return
+                }
+
+                removeGhost(ghostUuid)
+            })
+
+            cleanupGhostContainers()
+
             Promise.resolve(wire.mountAction(
                 config.processName,
                 folderKey ? { folderKey } : {},
                 config.processContext ?? {},
-            )).then(() => clearFinishedGhosts())
+            )).then(() => cleanupGhostContainers())
         }
 
         files.forEach((file) => {
             const uuid = randomUuid()
 
+            batchGhostUuids.push(uuid)
             addGhost(scope, uuid, file)
 
             // Livewire does not always fire the error callback (e.g. when the
