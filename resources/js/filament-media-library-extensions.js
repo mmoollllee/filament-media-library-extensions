@@ -189,7 +189,6 @@
                 return {
                     parent: gridCell.parentElement,
                     mode: anchorTile.querySelector(ROW_MARKER_SELECTOR) ? 'row' : 'grid',
-                    prepend: true,
                 }
             }
         }
@@ -197,7 +196,7 @@
         const fallbackContainer = scope.querySelector(FALLBACK_CONTAINER_SELECTOR)
 
         if (fallbackContainer) {
-            return { parent: fallbackContainer, mode: 'card', prepend: false }
+            return { parent: fallbackContainer, mode: 'card' }
         }
 
         let dynamicContainer = scope.querySelector(`.mle-inline-uploads[${GHOST_ATTRIBUTE}]`)
@@ -216,37 +215,142 @@
             }
         }
 
-        return { parent: dynamicContainer, mode: 'card', prepend: false }
+        return { parent: dynamicContainer, mode: 'card' }
     }
 
-    const attachGhost = (entry) => {
-        const { parent, mode, prepend } = resolveGhostContainer(entry.scope)
+    const GHOST_FILE_ICON_SVG =
+        '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">'
+        + '<path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z"/>'
+        + '</svg>'
 
-        entry.element.classList.remove('mle-ghost-tile--grid', 'mle-ghost-tile--row', 'mle-ghost-tile--card')
-        entry.element.classList.add(`mle-ghost-tile--${mode}`)
-
-        prepend && parent.firstElementChild
-            ? parent.insertBefore(entry.element, parent.firstElementChild)
-            : parent.appendChild(entry.element)
-    }
-
-    const addGhost = (scope, uuid, name) => {
-        const element = document.createElement('div')
-        element.className = 'mle-ghost-tile'
-        element.setAttribute(GHOST_ATTRIBUTE, uuid)
-        element.setAttribute('wire:ignore', '')
+    const ghostCaption = (entry, isOverlay) => {
+        const caption = document.createElement('div')
+        caption.className = isOverlay
+            ? 'mle-ghost-caption mle-ghost-caption--overlay text-white absolute w-full left-0 bottom-0 z-10 bg-gradient-to-t from-black to-transparent p-3 pt-5 rounded-b-lg'
+            : 'mle-ghost-caption w-full'
 
         const nameElement = document.createElement('span')
         nameElement.className = 'mle-inline-upload-name'
-        nameElement.textContent = name
+        nameElement.textContent = entry.name
 
         const progressElement = document.createElement('div')
-        progressElement.className = 'mle-inline-upload-progress'
+        progressElement.className = isOverlay
+            ? 'mle-inline-upload-progress mle-inline-upload-progress--overlay'
+            : 'mle-inline-upload-progress'
         progressElement.appendChild(document.createElement('div'))
 
-        element.append(nameElement, progressElement)
+        caption.append(nameElement, progressElement)
 
-        const entry = { element, scope }
+        return caption
+    }
+
+    // Mimics the real tile markup (same utility classes as the vendor views):
+    // image uploads show a local preview with the vendor's gradient caption,
+    // other files get the icon-style card; rows mirror the list layout.
+    const renderGhostContent = (entry, mode) => {
+        entry.mode = mode
+        entry.element.className = `mle-ghost-tile mle-ghost-tile--${mode}`
+        entry.element.replaceChildren()
+
+        if (mode === 'row') {
+            entry.element.classList.add('flex', 'flex-row', 'items-center', 'w-full', 'h-12', 'border-gray-200', 'dark:border-white/5')
+
+            const selectionSpacer = document.createElement('div')
+            selectionSpacer.className = 'mle-ghost-row-spacer'
+
+            const thumbnailCell = document.createElement('div')
+            thumbnailCell.className = 'px-1 py-4 flex flex-row justify-center items-center w-10 shrink-0 grow-0'
+
+            if (entry.objectUrl) {
+                const thumbnail = document.createElement('img')
+                thumbnail.src = entry.objectUrl
+                thumbnail.className = 'mle-ghost-row-thumbnail object-cover rounded-full ring ring-gray-100 dark:ring-gray-800'
+                thumbnailCell.appendChild(thumbnail)
+            } else {
+                thumbnailCell.innerHTML = GHOST_FILE_ICON_SVG
+                thumbnailCell.firstElementChild.classList.add('mle-ghost-row-icon', 'text-primary-600', 'dark:text-primary-400')
+            }
+
+            const nameCell = document.createElement('div')
+            nameCell.className = 'px-3 py-4 grow truncate'
+
+            const nameElement = document.createElement('span')
+            nameElement.className = 'mle-inline-upload-name'
+            nameElement.textContent = entry.name
+            nameCell.appendChild(nameElement)
+
+            const progressCell = document.createElement('div')
+            progressCell.className = 'pl-3 pr-4 shrink-0 grow-0'
+
+            const progressElement = document.createElement('div')
+            progressElement.className = 'mle-inline-upload-progress mle-ghost-row-progress'
+            progressElement.appendChild(document.createElement('div'))
+            progressCell.appendChild(progressElement)
+
+            entry.element.append(selectionSpacer, thumbnailCell, nameCell, progressCell)
+
+            return
+        }
+
+        const square = document.createElement('div')
+        square.className = 'relative aspect-square'
+
+        const card = document.createElement('div')
+        card.className = 'size-full bg-white dark:bg-gray-900 shadow-sm rounded-lg'
+
+        if (!entry.objectUrl) {
+            card.classList.add('ring-1', 'ring-gray-500/20')
+        }
+
+        const cardContent = document.createElement('div')
+        cardContent.className = 'relative size-full p-3 flex flex-col justify-between'
+
+        if (entry.objectUrl) {
+            const preview = document.createElement('img')
+            preview.src = entry.objectUrl
+            preview.className = 'absolute top-0 left-0 size-full object-cover rounded-lg'
+            cardContent.appendChild(preview)
+            cardContent.appendChild(document.createElement('div'))
+            cardContent.appendChild(ghostCaption(entry, true))
+        } else {
+            const iconRow = document.createElement('div')
+            iconRow.className = 'flex flex-row justify-between'
+            iconRow.innerHTML = GHOST_FILE_ICON_SVG
+            iconRow.firstElementChild.classList.add('size-8', 'text-primary-600', 'dark:text-primary-400')
+
+            cardContent.appendChild(iconRow)
+            cardContent.appendChild(ghostCaption(entry, false))
+        }
+
+        card.appendChild(cardContent)
+        square.appendChild(card)
+        entry.element.appendChild(square)
+    }
+
+    const attachGhost = (entry) => {
+        const { parent, mode } = resolveGhostContainer(entry.scope)
+
+        if (entry.mode !== mode) {
+            renderGhostContent(entry, mode)
+        }
+
+        // Always show uploads last, regardless of the list's sort order.
+        parent.appendChild(entry.element)
+    }
+
+    const addGhost = (scope, uuid, file) => {
+        const element = document.createElement('div')
+        element.setAttribute(GHOST_ATTRIBUTE, uuid)
+        element.setAttribute('wire:ignore', '')
+
+        const entry = {
+            element,
+            scope,
+            name: file.name,
+            objectUrl: file.type?.startsWith('image/') ? URL.createObjectURL(file) : null,
+            mode: null,
+        }
+
         ghostRegistry.set(uuid, entry)
         attachGhost(entry)
     }
@@ -286,17 +390,30 @@
         setTimeout(() => removeGhost(uuid), ERRORED_UPLOAD_HIDE_AFTER_MS)
     }
 
-    const removeGhost = (uuid) => {
-        ghostRegistry.get(uuid)?.element.remove()
+    const discardGhostEntry = (uuid, entry) => {
+        entry.element.remove()
+
+        if (entry.objectUrl) {
+            URL.revokeObjectURL(entry.objectUrl)
+        }
+
         ghostRegistry.delete(uuid)
+    }
+
+    const removeGhost = (uuid) => {
+        const entry = ghostRegistry.get(uuid)
+
+        if (entry) {
+            discardGhostEntry(uuid, entry)
+        }
+
         cleanupGhostContainers()
     }
 
     const clearFinishedGhosts = () => {
         ghostRegistry.forEach((entry, uuid) => {
             if (!entry.element.classList.contains(ERRORED_CLASS)) {
-                entry.element.remove()
-                ghostRegistry.delete(uuid)
+                discardGhostEntry(uuid, entry)
             }
         })
 
@@ -339,7 +456,7 @@
         files.forEach((file) => {
             const uuid = randomUuid()
 
-            addGhost(scope, uuid, file.name)
+            addGhost(scope, uuid, file)
 
             wire.upload(
                 `${config.uploadPath}.${uuid}`,

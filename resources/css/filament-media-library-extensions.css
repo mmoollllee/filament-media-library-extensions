@@ -26,58 +26,72 @@
 /*
  * Ghost tiles: placeholder cards/rows with a progress bar, rendered directly
  * inside the file grid (`--grid`), the file list (`--row`), or a fallback
- * host container (`--card`) while a file uploads.
+ * host container (`--card`) while a file uploads. The card/row look itself
+ * comes from the same utility classes the vendor tiles use — these rules
+ * only add the upload-specific bits.
  */
 
 .mle-ghost-tile {
     position: relative;
+    min-width: 0;
+    animation: mle-ghost-pulse 2.5s ease-in-out infinite;
+}
+
+@keyframes mle-ghost-pulse {
+    0%,
+    100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.6;
+    }
+}
+
+.mle-ghost-tile--card {
+    width: 8rem;
+}
+
+.mle-ghost-caption {
     display: flex;
     flex-direction: column;
-    justify-content: flex-end;
     gap: 0.375rem;
     min-width: 0;
 }
 
-.mle-ghost-tile--grid,
-.mle-ghost-tile--card {
-    aspect-ratio: 1 / 1;
-    padding: 0.75rem;
-    border-radius: 0.5rem;
+.mle-ghost-caption--overlay .mle-inline-upload-name {
+    color: #fff;
+}
+
+.mle-inline-upload-progress--overlay {
+    background-color: rgb(255 255 255 / 0.35);
+}
+
+.mle-inline-upload-progress--overlay > div {
     background-color: #fff;
-    box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-    outline: 1px dashed var(--gray-400, #9ca3af);
-    outline-offset: -1px;
 }
 
-.dark .mle-ghost-tile--grid,
-.dark .mle-ghost-tile--card {
-    background-color: var(--gray-900, #111827);
-    outline-color: var(--gray-600, #4b5563);
-}
-
-.mle-ghost-tile--card {
-    width: 8rem;
-}
-
-.mle-ghost-tile--row {
-    flex-direction: row;
-    align-items: center;
-    gap: 0.75rem;
-    height: 3rem;
-    padding: 0 1rem;
-}
-
-.mle-ghost-tile--row .mle-inline-upload-name {
-    flex: 1 1 auto;
-}
-
-.mle-ghost-tile--row .mle-inline-upload-progress {
+.mle-ghost-row-spacer {
     flex: none;
+    width: 2.75rem;
+}
+
+.mle-ghost-row-thumbnail {
+    width: 2rem;
+    height: 2rem;
+}
+
+.mle-ghost-row-icon {
+    width: 1.25rem;
+    height: 1.25rem;
+}
+
+.mle-ghost-row-progress {
     width: 8rem;
 }
 
 .mle-ghost-tile.mle-inline-upload-errored {
-    outline-color: var(--danger-400, #f87171);
+    animation: none;
 }
 
 .mle-ghost-tile.mle-inline-upload-errored .mle-inline-upload-name {
