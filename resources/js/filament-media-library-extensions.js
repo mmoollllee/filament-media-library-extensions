@@ -190,7 +190,92 @@
         })
     }
 
+    // ------------------------------------------- dropdown observer leak fix
+    //
+    // Filament's `filamentDropdown` Alpine component creates MutationObservers
+    // in `init()` and never disconnects them. When a Livewire morph shifts
+    // reused file tiles (e.g. an inline upload inserting into the list),
+    // Alpine re-initializes the moved dropdowns while the stale observers
+    // stay alive — observers with different random panel ids then rewrite
+    // `aria-controls`/`id` against each other in an infinite `syncAria` loop,
+    // freezing the page. Wrapping the component registration captures the
+    // observers created during `init()` and disconnects the previous set on
+    // every re-init (and on destroy), so exactly one observer set stays live
+    // per element. The vendor markup and behavior remain untouched.
+    const patchFilamentDropdownObservers = () => {
+        const alpine = window.Alpine
+
+        if (!alpine?.data || alpine.data.__mleDropdownPatched) {
+            return
+        }
+
+        const originalData = alpine.data.bind(alpine)
+
+        const disconnectStaleObservers = (element) => {
+            (element?.__mleDropdownObservers ?? []).forEach((observer) => observer.disconnect())
+
+            if (element) {
+                element.__mleDropdownObservers = []
+            }
+        }
+
+        const patchedData = (name, callback) => {
+            if (name !== 'filamentDropdown' || typeof callback !== 'function') {
+                return originalData(name, callback)
+            }
+
+            return originalData(name, (...parameters) => {
+                const component = callback(...parameters)
+                const originalInit = component.init
+                const originalDestroy = component.destroy
+
+                if (typeof originalInit === 'function') {
+                    component.init = function (...initArguments) {
+                        disconnectStaleObservers(this.$el)
+
+                        const capturedObservers = []
+                        const NativeMutationObserver = window.MutationObserver
+
+                        window.MutationObserver = class extends NativeMutationObserver {
+                            constructor(...observerArguments) {
+                                super(...observerArguments)
+                                capturedObservers.push(this)
+                            }
+                        }
+
+                        try {
+                            return originalInit.apply(this, initArguments)
+                        } finally {
+                            window.MutationObserver = NativeMutationObserver
+                            this.$el.__mleDropdownObservers = [
+                                ...(this.$el.__mleDropdownObservers ?? []),
+                                ...capturedObservers,
+                            ]
+                        }
+                    }
+                }
+
+                component.destroy = function (...destroyArguments) {
+                    disconnectStaleObservers(this.$el)
+
+                    return typeof originalDestroy === 'function'
+                        ? originalDestroy.apply(this, destroyArguments)
+                        : undefined
+                }
+
+                return component
+            })
+        }
+
+        patchedData.__mleDropdownPatched = true
+        alpine.data = patchedData
+    }
+
+    document.addEventListener('alpine:init', patchFilamentDropdownObservers)
+
     onLivewireReady(() => {
+        patchFilamentDropdownObservers()
+
         window.Livewire.hook?.('morph', detachGhostsForMorph)
         window.Livewire.hook?.('morphed', reattachGhostsAfterMorph)
 

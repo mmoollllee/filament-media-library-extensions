@@ -42,16 +42,15 @@ return [
     'auto_select_uploads' => true,
 
     /*
-     * Replaces the file tiles' action set (move/delete/rename/… with an
-     * ActionGroup dropdown per tile) by a slim set of plain icon buttons:
-     * preview, move, delete. Rename, duplicate and download remain available
-     * in the file info sidebar. This is also a load-bearing workaround:
-     * Filament's dropdown component leaks MutationObservers across Livewire
-     * morphs — a dropdown per tile escalates repeated list re-renders (as
-     * caused by inline uploads) into an infinite aria-sync loop that freezes
-     * the page.
+     * Optional UI simplification: replaces the file tiles' vendor action set
+     * (move/delete plus an ActionGroup dropdown per tile) by a slim set of
+     * plain icon buttons: preview, move, delete. Rename, duplicate and
+     * download remain available in the file info sidebar. Off by default —
+     * the vendor tile UI stays untouched. (The freeze formerly worked around
+     * here is fixed at its root by the package's `filamentDropdown` observer
+     * patch in the bundled JS.)
      */
-    'slim_tile_actions' => true,
+    'slim_tile_actions' => false,
 
     /*
      * Uses the package's MediaPickerPreviewAction (PDF iframe preview, arrow-key
