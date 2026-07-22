@@ -11,6 +11,11 @@ Extensions for [Filament Media Library Pro](https://ralphjsmit.com/filament-medi
 
 The bundled JS also ships a narrow `MutationObserver` guard for a Filament dropdown observer leak (filament/support v5.7.x): dropdowns re-initialized across Livewire morphs leave stale aria-sync observers behind, which can escalate into a page-freezing loop on list-heavy pages. The guard keeps one active attribute-sync observer per dropdown element and can be dropped once fixed upstream.
 
+## Requirements
+
+- PHP 8.2+, Filament v5, Livewire v3/v4
+- [Filament Media Library Pro](https://ralphjsmit.com/filament-media-library) v4.1+ — a commercial package distributed via `https://satis.ralphjsmit.com`, so your app needs that composer repository (and a valid license) configured before installing this one.
+
 ## Installation
 
 ```bash
@@ -48,6 +53,10 @@ Each feature (`upload_button`, `inline_upload`, `dropzone`, `auto_select_uploads
 ## Note on the field view
 
 The upload button placement requires a copy of the explore package's `file-picker` view (`resources/views/filament/forms/components/media-picker.blade.php`). Re-diff it against `filament-explore::filament.forms.components.file-picker` when updating `ralphjsmit/laravel-filament-explore` (currently based on v1.1.2).
+
+## Contributing & tests
+
+The package ships no test suite of its own — it is covered from the consuming app (Filament resource tests plus a Pest v4 browser suite for the JS upload pipeline), because both runtime dependencies are license-gated and the interesting failure modes are Livewire-morph and browser behaviour. `AGENTS.md` documents the load-bearing invariants (security gates on the inline upload action, ghost-tile/morph rules, the dropdown observer guard, the vendor view re-diff duty) — read it before changing anything in `src/` or `resources/js/`.
 
 ## Limitations
 
