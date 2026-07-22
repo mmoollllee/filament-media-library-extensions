@@ -168,7 +168,33 @@
         window.Livewire ? callback() : document.addEventListener('livewire:init', callback)
     }
 
+    // Ghosts must NEVER sit inside DOM that Livewire is morphing: they shift
+    // the sibling pairing (Filament dropdown instances then fight over panel
+    // ids in their `syncAria` MutationObservers — an infinite loop freezing
+    // the page) and block region patches. Detach all ghosts right before any
+    // morph and re-attach afterwards — both happen synchronously within the
+    // same task, so nothing flickers.
+    const detachGhostsForMorph = () => {
+        ghostRegistry.forEach((entry) => {
+            if (entry.element.isConnected) {
+                entry.element.remove()
+            }
+        })
+    }
+
+    const reattachGhostsAfterMorph = () => {
+        ghostRegistry.forEach((entry) => {
+            if (!entry.element.isConnected) {
+                attachGhost(entry)
+            }
+        })
+    }
+
     onLivewireReady(() => {
+        window.Livewire.hook?.('morph', detachGhostsForMorph)
+        window.Livewire.hook?.('morphed', reattachGhostsAfterMorph)
+
+        // Safety net for ghosts that slip into a morph anyway.
         window.Livewire.hook?.('morph.removing', ({ el, skip }) => {
             if (el instanceof Element && el.hasAttribute(GHOST_ATTRIBUTE)) {
                 skip()

@@ -42,6 +42,18 @@ return [
     'auto_select_uploads' => true,
 
     /*
+     * Replaces the file tiles' action set (move/delete/rename/… with an
+     * ActionGroup dropdown per tile) by a slim set of plain icon buttons:
+     * preview, move, delete. Rename, duplicate and download remain available
+     * in the file info sidebar. This is also a load-bearing workaround:
+     * Filament's dropdown component leaks MutationObservers across Livewire
+     * morphs — a dropdown per tile escalates repeated list re-renders (as
+     * caused by inline uploads) into an infinite aria-sync loop that freezes
+     * the page.
+     */
+    'slim_tile_actions' => true,
+
+    /*
      * Uses the package's MediaPickerPreviewAction (PDF iframe preview, arrow-key
      * navigation, policy-aware file URLs) for the preview on MediaPicker file
      * tiles. The same action is also used on modal file tiles and in the
