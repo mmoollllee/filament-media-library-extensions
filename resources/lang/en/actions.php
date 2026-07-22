@@ -11,7 +11,7 @@ return [
         'next_label' => 'Next',
     ],
     'inline_upload' => [
-        'failed' => 'Upload failed',
+        'failed' => ':name: upload failed.',
         'unauthorized' => 'You are not allowed to upload files.',
         'rejected_type' => ':name: file type not allowed.',
         'rejected_size' => ':name: file too large (max. :max).',

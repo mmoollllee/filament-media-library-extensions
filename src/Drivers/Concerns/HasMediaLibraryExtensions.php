@@ -11,6 +11,8 @@ use Mmoollllee\FilamentMediaLibraryExtensions\Support\CreatedFilesCollector;
 use RalphJSmit\Filament\Explore\Data\FileData;
 use RalphJSmit\Filament\Explore\Data\TemporaryFileUploadData;
 use RalphJSmit\Filament\Explore\Filament\Actions\DeleteAction;
+use RalphJSmit\Filament\Explore\Filament\Actions\DownloadAction;
+use RalphJSmit\Filament\Explore\Filament\Actions\DuplicateAction;
 use RalphJSmit\Filament\Explore\Filament\Actions\MoveAction;
 use RalphJSmit\Filament\Explore\Filament\Actions\PreviewAction;
 use RalphJSmit\Filament\Explore\Support\ActionsCollection;
@@ -38,22 +40,20 @@ trait HasMediaLibraryExtensions
 
     public function getFileActions(): ActionsCollection
     {
-        // Slim tile actions: no ActionGroup dropdown on file tiles. Filament's
-        // dropdown component leaks MutationObservers across Livewire morphs —
-        // with a dropdown per tile, repeated list re-renders (e.g. inline
-        // uploads inserting tiles) escalate into an infinite `syncAria` loop
-        // that freezes the page. Rename/duplicate/download stay available in
-        // the file info sidebar.
+        // Slim tile actions: no ActionGroup dropdown on file tiles — a plain
+        // preview/move/delete set. Everything else the vendor tiles offer
+        // (rename, replace, edit image — plus download and duplicate, which
+        // this trait adds for slim mode) stays available in the file info
+        // sidebar via `getFileInfoActions()`. Note: slim mode replaces the
+        // whole tile set, including actions pushed via `fileActions()`.
         if (config('filament-media-library-extensions.slim_tile_actions')) {
-            $actions = new ActionsCollection([
+            return new ActionsCollection([
                 ...(config('filament-media-library-extensions.media_picker_preview')
                     ? [MediaPickerPreviewAction::make()->driver($this)]
                     : []),
                 MoveAction::make()->driver($this),
                 DeleteAction::make()->driver($this),
             ]);
-
-            return $actions;
         }
 
         $actions = parent::getFileActions();
@@ -72,18 +72,28 @@ trait HasMediaLibraryExtensions
     {
         $actions = parent::getFileInfoActions();
 
-        if (! config('filament-media-library-extensions.media_picker_preview')) {
-            return $actions;
+        if (config('filament-media-library-extensions.media_picker_preview')) {
+            $actions = new ActionsCollection($actions
+                ->map(function (Action|ActionGroup $action): Action|ActionGroup {
+                    if ($action instanceof PreviewAction && ! $action instanceof MediaPickerPreviewAction) {
+                        return MediaPickerPreviewAction::make()->driver($this);
+                    }
+
+                    return $action;
+                })
+                ->all());
         }
 
-        return new ActionsCollection($actions
-            ->map(function (Action|ActionGroup $action): Action|ActionGroup {
-                if ($action instanceof PreviewAction && ! $action instanceof MediaPickerPreviewAction) {
-                    return MediaPickerPreviewAction::make()->driver($this);
-                }
+        // Slim tiles dropped download/duplicate from the tile dropdown — the
+        // vendor sidebar does not carry them, so add them here.
+        if (config('filament-media-library-extensions.slim_tile_actions')) {
+            $actions = new ActionsCollection([
+                ...$actions->all(),
+                DownloadAction::make()->driver($this),
+                DuplicateAction::make()->driver($this),
+            ]);
+        }
 
-                return $action;
-            })
-            ->all());
+        return $actions;
     }
 }

@@ -26,10 +26,13 @@ return [
 
     /*
      * Turns the MediaPicker field, the file selection modal, and the upload modal
-     * into drag-and-drop targets. Dropped files are handed to the original
-     * upload modal's FilePond instance, so validation, progress and error
-     * handling stay untouched. The field drop zone requires the
-     * `upload_button` feature (it opens that action's modal).
+     * into drag-and-drop targets. With `inline_upload` enabled (default),
+     * dropped files upload inline with progress tiles and are validated by
+     * the picker's modal-less process action (accepted types, max file size,
+     * authorization); folder tiles are drop targets for subfolder uploads.
+     * With `inline_upload` disabled, dropped files are handed to the original
+     * upload modal's FilePond instance instead. The field drop zone requires
+     * the `upload_button` feature.
      */
     'dropzone' => true,
 
@@ -44,11 +47,13 @@ return [
     /*
      * Optional UI simplification: replaces the file tiles' vendor action set
      * (move/delete plus an ActionGroup dropdown per tile) by a slim set of
-     * plain icon buttons: preview, move, delete. Rename, duplicate and
-     * download remain available in the file info sidebar. Off by default —
-     * the vendor tile UI stays untouched. (The freeze formerly worked around
-     * here is fixed at its root by the package's `filamentDropdown` observer
-     * patch in the bundled JS.)
+     * plain icon buttons: preview, move, delete. The remaining tile actions
+     * (rename, replace, edit image) live in the file info sidebar anyway;
+     * download and duplicate are added to the sidebar in slim mode. Custom
+     * actions pushed via `fileActions()` are not rendered in slim mode.
+     * Off by default — the vendor tile UI stays untouched. (The freeze
+     * formerly worked around here is fixed at its root by the package's
+     * `filamentDropdown` observer guard in the bundled JS.)
      */
     'slim_tile_actions' => false,
 

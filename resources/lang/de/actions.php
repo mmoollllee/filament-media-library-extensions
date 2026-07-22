@@ -11,7 +11,7 @@ return [
         'next_label' => 'Weiter',
     ],
     'inline_upload' => [
-        'failed' => 'Upload fehlgeschlagen',
+        'failed' => ':name: Upload fehlgeschlagen.',
         'unauthorized' => 'Keine Berechtigung zum Hochladen.',
         'rejected_type' => ':name: Dateityp nicht erlaubt.',
         'rejected_size' => ':name: Datei zu groß (max. :max).',

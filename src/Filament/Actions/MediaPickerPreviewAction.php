@@ -124,7 +124,25 @@ class MediaPickerPreviewAction extends PreviewAction
                     return;
                 }
 
-                $action->getLivewire()->replaceMountedAction(
+                $livewire = $action->getLivewire();
+
+                // `replaceMountedAction()` resets the ENTIRE mounted stack.
+                // When the preview sits on top of another modal (the picker's
+                // selection modal, or a picker rendered inside an action's
+                // form), that would close the parent and discard its input —
+                // pop only the preview instead and mount the sibling on top.
+                if (count($livewire->getMountedActions()) > 1) {
+                    $livewire->unmountAction(cancelParentActions: false);
+                    $livewire->mountAction(
+                        $parentAction->getName(),
+                        ['fileKey' => $targetFileKey],
+                        $parentAction->getContext(),
+                    );
+
+                    return;
+                }
+
+                $livewire->replaceMountedAction(
                     $parentAction->getName(),
                     ['fileKey' => $targetFileKey],
                     $parentAction->getContext(),

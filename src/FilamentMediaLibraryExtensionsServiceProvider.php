@@ -4,9 +4,8 @@ declare(strict_types=1);
 
 namespace Mmoollllee\FilamentMediaLibraryExtensions;
 
-use Filament\Schemas\Components\Utilities\Get;
-use Filament\Schemas\Components\Utilities\Set;
 use Filament\Support\Facades\FilamentAsset;
+use Illuminate\Support\Collection;
 use Illuminate\Support\ServiceProvider;
 use Mmoollllee\FilamentMediaLibraryExtensions\Filament\Actions\MediaPickerPreviewAction;
 use Mmoollllee\FilamentMediaLibraryExtensions\Filament\Actions\MediaPickerUploadAction;
@@ -15,9 +14,10 @@ use Mmoollllee\FilamentMediaLibraryExtensions\Support\Assets\ContentVersionedCss
 use Mmoollllee\FilamentMediaLibraryExtensions\Support\Assets\ContentVersionedJs;
 use Mmoollllee\FilamentMediaLibraryExtensions\Support\CreatedFilesCollector;
 use Mmoollllee\FilamentMediaLibraryExtensions\Support\PickerUploads;
+use RalphJSmit\Filament\Explore\Authorization\FileAbility;
 use RalphJSmit\Filament\Explore\Data\FileData;
+use RalphJSmit\Filament\Explore\Drivers\Driver;
 use RalphJSmit\Filament\Explore\Enums\FileType;
-use RalphJSmit\Filament\Explore\Filament\Actions\SelectFileAction;
 use RalphJSmit\Filament\Explore\Filament\Actions\UploadAction;
 use RalphJSmit\Filament\Explore\Filament\Forms\Components\FilePicker;
 use RalphJSmit\Filament\MediaLibrary\Filament\Actions\SelectMediaAction;
@@ -74,14 +74,14 @@ class FilamentMediaLibraryExtensionsServiceProvider extends ServiceProvider
                 if (config('filament-media-library-extensions.inline_upload')) {
                     $component->registerActions([
                         fn (MediaPicker $component): ProcessInlineUploadsAction => ProcessInlineUploadsAction::make()
-                            ->driver(fn () => $component->getDriver()),
+                            ->driver(fn (): Driver => $component->getDriver()),
                     ]);
                 } else {
                     $component->registerActions([
                         fn (MediaPicker $component): MediaPickerUploadAction => MediaPickerUploadAction::make()
-                            ->driver(fn () => $component->getDriver())
+                            ->driver(fn (): Driver => $component->getDriver())
                             ->folder(fn (): ?FileData => $component->getScopedFolder() ?? $component->getDefaultFolder())
-                            ->acceptedFileTypes(fn () => $component->getAcceptedFileTypes())
+                            ->acceptedFileTypes(fn (): Collection => $component->getAcceptedFileTypes())
                             ->visible(fn (): bool => ! $component->isDisabled()),
                     ]);
                 }
@@ -95,13 +95,13 @@ class FilamentMediaLibraryExtensionsServiceProvider extends ServiceProvider
 
     /**
      * Every upload action (field, selection modal topbar, media library page)
-     * gets the trigger marker the drop zone script clicks, its modal becomes
-     * a drop target itself, and uploads inside a selection modal are
-     * auto-added to the modal's selection. With `inline_upload` enabled the
-     * button click is taken over client-side: inside a selection modal it
-     * opens the native file dialog and uploads inline (FilePond stays
-     * untouched as the no-JS/server fallback); elsewhere (e.g. the media
-     * library page) the JS falls back to mounting the original modal.
+     * gets the trigger marker: the package JS intercepts trigger clicks in
+     * the capture phase and — inside a zone carrying an inline upload
+     * config — opens the native file dialog instead. Without a config (media
+     * library page) or without the JS asset (no-JS, unpublished assets) the
+     * regular `wire:click` mounts the original FilePond modal, which stays
+     * the server-side fallback. The upload modal becomes a drop target, and
+     * uploads inside a selection modal are auto-added to its selection.
      */
     protected function configureUploadAction(): void
     {
@@ -117,19 +117,6 @@ class FilamentMediaLibraryExtensionsServiceProvider extends ServiceProvider
                 return;
             }
 
-            if (
-                config('filament-media-library-extensions.inline_upload')
-                && config('filament-media-library-extensions.upload_button')
-            ) {
-                $action
-                    ->alpineClickHandler('window.mleUploadTriggerClicked($event)')
-                    // Base64: extra attributes render unescaped — raw JSON
-                    // quotes would tear the attribute apart.
-                    ->extraAttributes(fn (UploadAction $action): array => [
-                        'data-mle-mount-context' => base64_encode(json_encode($action->getContext())),
-                    ], merge: true);
-            }
-
             $action->after(function (UploadAction $action): void {
                 if (! config('filament-media-library-extensions.auto_select_uploads')) {
                     return;
@@ -141,43 +128,20 @@ class FilamentMediaLibraryExtensionsServiceProvider extends ServiceProvider
                     return;
                 }
 
-                $mountedActions = $action->getLivewire()->getMountedActions();
-                $parentAction = count($mountedActions) >= 2 ? $mountedActions[count($mountedActions) - 2] : null;
+                $livewire = $action->getLivewire();
 
-                if (! $parentAction instanceof SelectFileAction) {
+                // Absolute mounted-action paths work for both the topbar and
+                // the empty-state upload button (relative Get/Set would
+                // resolve wrongly inside the empty state's own state path).
+                $parentSelectAction = PickerUploads::findParentSelectFileAction($livewire);
+
+                if (! $parentSelectAction) {
                     return;
                 }
 
-                $schemaComponent = $action->getSchemaComponent();
+                [$parentActionNestingIndex, $parentAction] = $parentSelectAction;
 
-                if (! $schemaComponent) {
-                    return;
-                }
-
-                $schemaComponent->evaluate(function (Get $get, Set $set) use ($createdFiles, $parentAction): void {
-                    if (! $parentAction->allowsMultipleFileSelection()) {
-                        $set(
-                            'files.selected_file_keys',
-                            [$createdFiles->first()->getKeyHash() => FileType::File->value],
-                            shouldCallUpdatedHooks: true,
-                        );
-
-                        return;
-                    }
-
-                    $selectedFileKeys = $get('files.bulk_selected_file_keys') ?? [];
-                    $maxFiles = $parentAction->getMaxFiles();
-
-                    foreach ($createdFiles as $createdFile) {
-                        if ($maxFiles && count($selectedFileKeys) >= $maxFiles) {
-                            break;
-                        }
-
-                        $selectedFileKeys[$createdFile->getKeyHash()] = FileType::File->value;
-                    }
-
-                    $set('files.bulk_selected_file_keys', $selectedFileKeys, shouldCallUpdatedHooks: true);
-                });
+                PickerUploads::mergeCreatedFilesIntoModalSelection($livewire, $parentActionNestingIndex, $parentAction, $createdFiles);
             });
         });
     }
@@ -208,6 +172,19 @@ class FilamentMediaLibraryExtensionsServiceProvider extends ServiceProvider
                         return [];
                     }
 
+                    // Mirror the field view's gate: users who may not create
+                    // files get no drop/upload affordance — otherwise every
+                    // dropped byte uploads before the server denies it.
+                    if (
+                        $picker->isDisabled()
+                        || ! $picker
+                            ->getDriver()
+                            ->authorize(FileAbility::Create, FileType::File, $picker->getScopedFolder() ?? $picker->getDefaultFolder())
+                            ->allowed()
+                    ) {
+                        return [];
+                    }
+
                     // Base64: modal window attributes render unescaped — raw
                     // JSON quotes would tear the attribute apart.
                     return [
@@ -215,7 +192,7 @@ class FilamentMediaLibraryExtensionsServiceProvider extends ServiceProvider
                             'uploadPath' => PickerUploads::pendingUploadsStatePath($picker),
                             'processName' => ProcessInlineUploadsAction::getDefaultName(),
                             'processContext' => ['schemaComponent' => $picker->getKey()],
-                            'accept' => $picker->getAcceptedFileTypes()->implode(','),
+                            'accept' => PickerUploads::effectiveAcceptedFileTypes($picker)->implode(','),
                         ])),
                     ];
                 }, merge: true);

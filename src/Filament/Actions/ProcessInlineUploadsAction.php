@@ -14,8 +14,8 @@ use RalphJSmit\Filament\Explore\Authorization\FileAbility;
 use RalphJSmit\Filament\Explore\Data\TemporaryFileUploadData;
 use RalphJSmit\Filament\Explore\Enums\FileType;
 use RalphJSmit\Filament\Explore\Filament\Actions\Action;
-use RalphJSmit\Filament\Explore\Filament\Actions\SelectFileAction;
 use RalphJSmit\Filament\Explore\Filament\Forms\Components\FilePicker;
+use Throwable;
 
 /**
  * Modal-less picker action consuming the pending inline uploads.
@@ -23,13 +23,15 @@ use RalphJSmit\Filament\Explore\Filament\Forms\Components\FilePicker;
  * The picker's JS uploads dropped/picked files via Livewire's upload API into
  * the picker's pending-uploads state path and then mounts this action — from
  * the field itself or nested inside the picker's selection modal. It
- * authorizes against the driver, validates each file against the field's
- * accepted types and the driver's max file size (the FileUpload rules of the
- * FilePond path do not run here), stores valid files via `Driver::createFile()`
- * and selects them: in the field state, or in the selection modal's selection
- * when one is mounted. An optional `folderKey` argument targets a drop-target
- * subfolder — resolved through the driver's scoped `findFile()` (visibility)
- * and constrained to the picker's scoped folder; otherwise files land in the
+ * authorizes against the driver, validates each file against the picker's
+ * effective accepted types (field-level, falling back to the driver's — the
+ * FileUpload rules of the FilePond path do not run here) and the driver's max
+ * file size, stores valid files via `Driver::createFile()` and selects them:
+ * in the field state, or in the selection modal's selection when one is
+ * mounted. The `uploadKeys` argument limits consumption to the mounting
+ * batch's own files; an optional `folderKey` argument targets a drop-target
+ * subfolder — resolved scope-safely through the driver ({@see
+ * PickerUploads::resolveDropTargetFolder()}); otherwise files land in the
  * modal's current folder or the picker's scoped/default folder. It is never
  * rendered as a button, so all safety checks live inside the action itself.
  */
@@ -47,9 +49,15 @@ class ProcessInlineUploadsAction extends Action
         $this->action(function (FilePicker $component, self $action, array $arguments): void {
             $livewire = $action->getLivewire();
 
+            $uploadKeys = $arguments['uploadKeys'] ?? null;
+            $uploadKeys = is_array($uploadKeys)
+                ? array_values(array_filter($uploadKeys, fn (mixed $uploadKey): bool => is_string($uploadKey)))
+                : null;
+
             $pendingUploads = PickerUploads::consumePendingUploads(
                 $livewire,
                 PickerUploads::pendingUploadsStatePath($component),
+                $uploadKeys,
             );
 
             if ($pendingUploads->isEmpty()) {
@@ -58,36 +66,28 @@ class ProcessInlineUploadsAction extends Action
 
             $driver = $component->getDriver();
 
-            $mountedActions = $livewire->getMountedActions();
-            $parentActionNestingIndex = count($mountedActions) - 2;
-            $parentSelectAction = ($mountedActions[$parentActionNestingIndex] ?? null) instanceof SelectFileAction
-                ? $mountedActions[$parentActionNestingIndex]
-                : null;
+            $parentSelectAction = PickerUploads::findParentSelectFileAction($livewire);
+            [$parentActionNestingIndex, $parentAction] = $parentSelectAction ?? [null, null];
 
             $scopedFolder = $component->getScopedFolder();
             $targetFolder = $scopedFolder ?? $component->getDefaultFolder();
 
-            if ($parentSelectAction) {
-                $currentFolderKey = data_get($livewire, "mountedActions.{$parentActionNestingIndex}.data.files.folder_key");
-                $currentFolder = $currentFolderKey ? $driver->findFile(FileType::Folder, $currentFolderKey) : null;
-
-                if ($currentFolder && PickerUploads::folderIsWithinScope($currentFolder, $scopedFolder)) {
-                    $targetFolder = $currentFolder;
-                }
+            if ($parentAction) {
+                $targetFolder = PickerUploads::resolveDropTargetFolder(
+                    $driver,
+                    data_get($livewire, "mountedActions.{$parentActionNestingIndex}.data.files.folder_key"),
+                    $scopedFolder,
+                ) ?? $targetFolder;
             }
 
-            $argumentFolderKey = $arguments['folderKey'] ?? null;
+            $targetFolder = PickerUploads::resolveDropTargetFolder($driver, $arguments['folderKey'] ?? null, $scopedFolder)
+                ?? $targetFolder;
 
-            if (filled($argumentFolderKey) && is_string($argumentFolderKey)) {
-                $argumentFolder = $driver->findFile(FileType::Folder, $argumentFolderKey);
-
-                if ($argumentFolder && PickerUploads::folderIsWithinScope($argumentFolder, $scopedFolder)) {
-                    $targetFolder = $argumentFolder;
-                }
-            }
-
-            if (! $driver->authorize(FileAbility::Create, FileType::File, $targetFolder)->allowed()) {
-                $pendingUploads->each(fn (TemporaryUploadedFile $file) => $file->delete());
+            // The blade view withholds the upload UI for disabled pickers,
+            // but the action itself stays client-mountable — enforce the
+            // disabled state server-side like the legacy FilePond action.
+            if ($component->isDisabled() || ! $driver->authorize(FileAbility::Create, FileType::File, $targetFolder)->allowed()) {
+                $pendingUploads->each(fn (TemporaryUploadedFile $file): ?bool => $file->delete());
 
                 Notification::make()
                     ->title(__('filament-media-library-extensions::actions.inline_upload.unauthorized'))
@@ -97,7 +97,7 @@ class ProcessInlineUploadsAction extends Action
                 return;
             }
 
-            $acceptedFileTypes = $component->getAcceptedFileTypes();
+            $acceptedFileTypes = PickerUploads::effectiveAcceptedFileTypes($component);
             $maxFileSizeKb = $driver->getMaxFileSizeKb();
 
             $createdFiles = collect();
@@ -125,14 +125,27 @@ class ProcessInlineUploadsAction extends Action
                     continue;
                 }
 
-                $createdFiles->push($driver->createFile(
-                    folder: $targetFolder,
-                    temporaryFileUploadData: TemporaryFileUploadData::fromUploadedFile($file),
-                ));
+                // One failing file (disk error, conversion failure) must not
+                // abort the batch — the vendor FilePond path stores each file
+                // independently too.
+                try {
+                    $createdFiles->push($driver->createFile(
+                        folder: $targetFolder,
+                        temporaryFileUploadData: TemporaryFileUploadData::fromUploadedFile($file),
+                    ));
+                } catch (Throwable $exception) {
+                    report($exception);
+
+                    $rejectedMessages[] = __('filament-media-library-extensions::actions.inline_upload.failed', [
+                        'name' => $file->getClientOriginalName(),
+                    ]);
+
+                    rescue(fn (): ?bool => $file->delete(), report: false);
+                }
             }
 
-            if ($parentSelectAction) {
-                PickerUploads::mergeCreatedFilesIntoModalSelection($livewire, $parentActionNestingIndex, $parentSelectAction, $createdFiles);
+            if ($parentAction) {
+                PickerUploads::mergeCreatedFilesIntoModalSelection($livewire, $parentActionNestingIndex, $parentAction, $createdFiles);
             } else {
                 PickerUploads::mergeCreatedFilesIntoState($component, $createdFiles);
             }

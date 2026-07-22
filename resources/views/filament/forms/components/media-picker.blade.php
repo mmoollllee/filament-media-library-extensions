@@ -42,7 +42,7 @@
                 'uploadPath' => PickerUploads::pendingUploadsStatePath($field),
                 'processName' => ProcessInlineUploadsAction::getDefaultName(),
                 'processContext' => ['schemaComponent' => $field->getKey()],
-                'accept' => $getAcceptedFileTypes()->implode(','),
+                'accept' => PickerUploads::effectiveAcceptedFileTypes($field)->implode(','),
             ]));
         }
     @endphp
@@ -195,12 +195,14 @@
                 data-mle-ghost-fallback
                 wire:ignore
             ></div>
+        @endif
 
-            <div class="mt-4 flex flex-row gap-4">
-                @if ($selectFileAction->isVisible())
-                    {{ $selectFileAction }}
-                @endif
+        <div class="mt-4 flex flex-row gap-4">
+            @if ($selectFileAction->isVisible())
+                {{ $selectFileAction }}
+            @endif
 
+            @if (filled($mleInlineFieldConfig))
                 <x-filament::button
                     color="gray"
                     type="button"
@@ -208,25 +210,13 @@
                 >
                     {{ __('filament-media-library-extensions::actions.media_picker_upload.label') }}
                 </x-filament::button>
+            @elseif ($uploadAction?->isVisible())
+                {{ $uploadAction }}
+            @endif
 
-                @if ($clearAction->isVisible())
-                    {{ $clearAction }}
-                @endif
-            </div>
-        @else
-            <div class="mt-4 flex flex-row gap-4">
-                @if ($selectFileAction->isVisible())
-                    {{ $selectFileAction }}
-                @endif
-
-                @if ($uploadAction?->isVisible())
-                    {{ $uploadAction }}
-                @endif
-
-                @if ($clearAction->isVisible())
-                    {{ $clearAction }}
-                @endif
-            </div>
-        @endif
+            @if ($clearAction->isVisible())
+                {{ $clearAction }}
+            @endif
+        </div>
     </div>
 </x-dynamic-component>

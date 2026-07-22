@@ -29,6 +29,7 @@
     const TRIGGER_SELECTOR = '[data-mle-upload-trigger]'
     const OPEN_DIALOG_SELECTOR = '[data-mle-inline-open]'
     const POND_BROWSER_SELECTOR = 'input[type="file"].filepond--browser'
+    const POND_ROOT_SELECTOR = '.filepond--root'
     const FILE_TILE_SELECTOR = '[data-file-key]'
     const FOLDER_TILE_SELECTOR = '[data-file-type="folder"][data-file-key]'
     const GRID_COLUMN_SELECTOR = '.fi-grid-col'
@@ -37,7 +38,10 @@
     const FALLBACK_CONTAINER_SELECTOR = '[data-mle-ghost-fallback]'
     const MODAL_CONFIG_ATTRIBUTE = 'data-mle-inline-modal'
     const FIELD_CONFIG_ATTRIBUTE = 'data-mle-inline-field'
-    const MOUNT_CONTEXT_ATTRIBUTE = 'data-mle-mount-context'
+    // The config attribute sits on the picker root / the select modal window —
+    // independent of the (config-gated) drop zone marker, so the upload
+    // buttons keep working with `dropzone` disabled.
+    const CONFIG_ELEMENT_SELECTOR = `[${MODAL_CONFIG_ATTRIBUTE}], [${FIELD_CONFIG_ATTRIBUTE}]`
     const GHOST_ATTRIBUTE = 'data-mle-upload-ghost'
     const ACTIVE_CLASS = 'mle-dropzone-active'
     const FOLDER_ACTIVE_CLASS = 'mle-folder-dropzone-active'
@@ -51,8 +55,8 @@
 
     // ---------------------------------------------------------------- helpers
 
-    let pondPollTimer = null
     let isInternalDrag = false
+    let activeZone = null
     let activeFolderTile = null
 
     // Drags that originate inside the page (dragging a file tile, sortable
@@ -100,9 +104,30 @@
         }
     }
 
-    const inlineConfigFromZone = (zone) =>
-        decodeJsonAttribute(zone.getAttribute(MODAL_CONFIG_ATTRIBUTE))
-            ?? decodeJsonAttribute(zone.getAttribute(FIELD_CONFIG_ATTRIBUTE))
+    // Decoded per element and memoized on the raw attribute value — dragover
+    // consults the config at pointer-move frequency.
+    const inlineConfigCache = new WeakMap()
+
+    const inlineConfigFromElement = (element) => {
+        const rawValue = element.getAttribute(MODAL_CONFIG_ATTRIBUTE) ?? element.getAttribute(FIELD_CONFIG_ATTRIBUTE)
+
+        if (!rawValue) {
+            return null
+        }
+
+        const cached = inlineConfigCache.get(element)
+
+        if (cached && cached.rawValue === rawValue) {
+            return cached.config
+        }
+
+        const config = decodeJsonAttribute(rawValue)
+        inlineConfigCache.set(element, { rawValue, config })
+
+        return config
+    }
+
+    const inlineConfigFromZone = inlineConfigFromElement
 
     const zoneFromEvent = (event) => {
         const target = event.target instanceof Element ? event.target : null
@@ -146,11 +171,18 @@
         activeFolderTile?.classList.add(FOLDER_ACTIVE_CLASS)
     }
 
-    const clearHighlights = () => {
-        document
-            .querySelectorAll(`${ZONE_SELECTOR}.${ACTIVE_CLASS}`)
-            .forEach((zone) => zone.classList.remove(ACTIVE_CLASS))
+    const setActiveZone = (zone) => {
+        if (zone !== activeZone) {
+            activeZone?.classList.remove(ACTIVE_CLASS)
+            activeZone = zone
+        }
 
+        // Re-adding covers Livewire morphs stripping the client-side class.
+        activeZone?.classList.add(ACTIVE_CLASS)
+    }
+
+    const clearHighlights = () => {
+        setActiveZone(null)
         setActiveFolderTile(null)
     }
 
@@ -183,9 +215,13 @@
     }
 
     const reattachGhostsAfterMorph = () => {
+        // Ghosts of the same scope share their grid — resolve it once per
+        // morph instead of once per ghost.
+        const containerCache = new Map()
+
         ghostRegistry.forEach((entry) => {
             if (!entry.element.isConnected) {
-                attachGhost(entry)
+                attachGhost(entry, containerCache)
             }
         })
     }
@@ -201,12 +237,26 @@
     // infinite `syncAria` loop, freezing the page.
     //
     // Rule enforced here: a dropdown element only ever has ONE active
-    // observer — registering a new one (a re-init) disconnects the stale
-    // ones. Remove once fixed upstream (dropdown `destroy()` disconnect).
+    // attribute-sync observer — registering a new one (a re-init) disconnects
+    // the stale ones. The guard is narrowed to attribute-only observers
+    // (`attributeFilter` without childList/subtree — the signature of the
+    // leaking dropdown observers), so foreign content observers inside a
+    // dropdown are never touched, and the cheap options check runs before
+    // any DOM walk. `disconnect()` is observer-global by spec — an
+    // attribute-only multi-target observer would lose all its targets, which
+    // is exactly right for Filament's own dropdown observer (one observer
+    // covering panel + trigger). Remove once fixed upstream (dropdown
+    // `destroy()` disconnect).
     const originalMutationObserve = MutationObserver.prototype.observe
 
     MutationObserver.prototype.observe = function (target, options) {
-        if (target instanceof Element && target.closest?.('.fi-dropdown')) {
+        if (
+            options?.attributeFilter
+            && !options.childList
+            && !options.subtree
+            && target instanceof Element
+            && target.closest?.('.fi-dropdown')
+        ) {
             target.__mleDropdownObservers ??= new Set()
 
             target.__mleDropdownObservers.forEach((staleObserver) => {
@@ -234,9 +284,27 @@
         })
     })
 
+    // Floating body-level host as last resort — never another zone: the
+    // first zone on the page can belong to a completely different picker.
+    const floatingGhostHost = () => {
+        let host = document.querySelector('.mle-inline-uploads--floating')
+
+        if (!host) {
+            host = document.createElement('div')
+            host.className = 'mle-inline-uploads mle-inline-uploads--floating'
+            host.setAttribute(GHOST_ATTRIBUTE, 'container')
+            document.body.appendChild(host)
+        }
+
+        return host
+    }
+
     const resolveGhostContainer = (scope) => {
         if (!scope.isConnected) {
-            scope = document.querySelector(ZONE_SELECTOR) ?? document.body
+            // The scope vanished (e.g. the selection modal closed
+            // mid-upload) — keep the ghost visible in the floating host
+            // instead of adopting a foreign picker's grid.
+            return { parent: floatingGhostHost(), mode: 'card', cellClassName: null }
         }
 
         const anchorTile = scope.querySelector(FILE_TILE_SELECTOR)
@@ -347,6 +415,11 @@
         entry.element.className = [cellClassName ?? '', 'mle-ghost-tile', `mle-ghost-tile--${mode}`]
             .filter(Boolean)
             .join(' ')
+
+        if (entry.errored) {
+            entry.element.classList.add(ERRORED_CLASS)
+        }
+
         entry.element.replaceChildren()
 
         if (mode === 'row') {
@@ -387,6 +460,9 @@
             progressCell.appendChild(progressElement)
 
             row.append(selectionSpacer, thumbnailCell, nameCell, progressCell)
+
+            // Cached for the per-progress-event updates.
+            entry.progressBar = progressElement.firstElementChild
 
             return
         }
@@ -430,15 +506,43 @@
             square.appendChild(card)
             entry.element.appendChild(square)
         }
+
+        // Cached for the per-progress-event updates.
+        entry.progressBar = entry.element.querySelector('.mle-inline-upload-progress > div')
     }
 
-    const attachGhost = (entry) => {
-        const container = resolveGhostContainer(entry.scope)
+    // Errored ghosts live OUTSIDE the file grid (the field's server-rendered
+    // `wire:ignore` fallback host, or the floating host): they auto-hide, no
+    // real tile morphs in for them, and any foreign node left inside the
+    // grid would keep Livewire's morph from applying re-rendered tiles.
+    const erroredGhostContainer = (entry) => {
+        const host = (entry.scope.isConnected ? entry.scope.querySelector(FALLBACK_CONTAINER_SELECTOR) : null)
+            ?? floatingGhostHost()
+
+        return { parent: host, mode: 'card', cellClassName: null }
+    }
+
+    const attachGhost = (entry, containerCache = null) => {
+        let container
+
+        if (entry.errored) {
+            container = erroredGhostContainer(entry)
+        } else if (containerCache?.has(entry.scope)) {
+            container = containerCache.get(entry.scope)
+        } else {
+            container = resolveGhostContainer(entry.scope)
+            containerCache?.set(entry.scope, container)
+        }
+
         const containerSignature = `${container.mode}|${container.cellClassName ?? ''}`
 
         if (entry.containerSignature !== containerSignature) {
             entry.containerSignature = containerSignature
             renderGhostContent(entry, container)
+        }
+
+        if (entry.errored) {
+            entry.element.classList.add(ERRORED_CLASS)
         }
 
         // Always show uploads last, regardless of the list's sort order.
@@ -456,6 +560,8 @@
             name: file.name,
             objectUrl: file.type?.startsWith('image/') ? URL.createObjectURL(file) : null,
             containerSignature: null,
+            progressBar: null,
+            errored: false,
         }
 
         ghostRegistry.set(uuid, entry)
@@ -477,10 +583,8 @@
 
         ensureGhostAttached(entry)
 
-        const bar = entry.element.querySelector('.mle-inline-upload-progress > div')
-
-        if (bar) {
-            bar.style.width = `${progress}%`
+        if (entry.progressBar) {
+            entry.progressBar.style.width = `${progress}%`
         }
     }
 
@@ -491,13 +595,17 @@
             return
         }
 
-        ensureGhostAttached(entry)
-        entry.element.classList.add(ERRORED_CLASS)
+        // Errored ghosts move to a safe host immediately (`attachGhost`
+        // routes them there) and keep the errored styling across morphs.
+        entry.errored = true
+        attachGhost(entry)
 
         setTimeout(() => removeGhost(uuid), ERRORED_UPLOAD_HIDE_AFTER_MS)
     }
 
     const discardGhostEntry = (uuid, entry) => {
+        const parent = entry.element.parentElement
+
         entry.element.remove()
 
         if (entry.objectUrl) {
@@ -505,6 +613,11 @@
         }
 
         ghostRegistry.delete(uuid)
+
+        // Only the container the ghost just left can have become empty.
+        if (parent?.matches(`.mle-inline-uploads[${GHOST_ATTRIBUTE}]`) && !parent.childElementCount) {
+            parent.remove()
+        }
     }
 
     const removeGhost = (uuid) => {
@@ -513,32 +626,6 @@
         if (entry) {
             discardGhostEntry(uuid, entry)
         }
-
-        cleanupGhostContainers()
-    }
-
-    // Move an errored ghost out of the (morphed) file grid into a safe host:
-    // the field's server-rendered `wire:ignore` fallback host, or a floating
-    // body-level host as last resort. Any foreign node left inside the grid
-    // would keep Livewire's morph from applying re-rendered tiles.
-    const relocateErroredGhost = (entry) => {
-        let host = entry.scope.isConnected ? entry.scope.querySelector(FALLBACK_CONTAINER_SELECTOR) : null
-
-        if (!host) {
-            host = document.querySelector('.mle-inline-uploads--floating')
-
-            if (!host) {
-                host = document.createElement('div')
-                host.className = 'mle-inline-uploads mle-inline-uploads--floating'
-                host.setAttribute(GHOST_ATTRIBUTE, 'container')
-                document.body.appendChild(host)
-            }
-        }
-
-        entry.containerSignature = 'card|'
-        renderGhostContent(entry, { mode: 'card', cellClassName: null })
-        entry.element.classList.add(ERRORED_CLASS)
-        host.appendChild(entry.element)
     }
 
     const cleanupGhostContainers = () => {
@@ -560,6 +647,7 @@
 
         let pendingCount = files.length
         const batchGhostUuids = []
+        const succeededUploadKeys = []
 
         const settle = () => {
             pendingCount--
@@ -573,17 +661,11 @@
             // applying the re-rendered tiles (the fresh tile would only show
             // up after the next full render). Finished ghosts are removed —
             // their real tiles are about to morph in — and errored ones
-            // (auto-hiding, no incoming tile) relocate to a safe host.
+            // (auto-hiding, no incoming tile) already sit in a safe host.
             batchGhostUuids.forEach((ghostUuid) => {
                 const entry = ghostRegistry.get(ghostUuid)
 
-                if (!entry) {
-                    return
-                }
-
-                if (entry.element.classList.contains(ERRORED_CLASS)) {
-                    relocateErroredGhost(entry)
-
+                if (!entry || entry.errored) {
                     return
                 }
 
@@ -592,11 +674,26 @@
 
             cleanupGhostContainers()
 
+            if (!succeededUploadKeys.length) {
+                return
+            }
+
+            // `uploadKeys` limits the server-side consume to THIS batch —
+            // concurrent batches may target different folders.
             Promise.resolve(wire.mountAction(
                 config.processName,
-                folderKey ? { folderKey } : {},
+                {
+                    uploadKeys: succeededUploadKeys,
+                    ...(folderKey ? { folderKey } : {}),
+                },
                 config.processContext ?? {},
-            )).then(() => cleanupGhostContainers())
+            ))
+                .then(() => cleanupGhostContainers())
+                .catch((error) => {
+                    // The uploads stay in the pending state path; Livewire
+                    // surfaces expired sessions / server errors itself.
+                    console.error('[filament-media-library-extensions] processing inline uploads failed', error)
+                })
         }
 
         files.forEach((file) => {
@@ -636,7 +733,10 @@
             wire.upload(
                 `${config.uploadPath}.${uuid}`,
                 file,
-                () => settleOnce(() => ghostProgress(uuid, 100)),
+                () => settleOnce(() => {
+                    succeededUploadKeys.push(uuid)
+                    ghostProgress(uuid, 100)
+                }),
                 () => settleOnce(() => ghostErrored(uuid)),
                 (event) => {
                     restartStallTimer()
@@ -690,48 +790,33 @@
         input.click()
     }
 
-    // The field's upload button opens the native dialog for its zone.
+    // Upload buttons: the field's own button and every upload action trigger
+    // inside an element carrying an inline config open the native file
+    // dialog. Intercepted in the CAPTURE phase, so the trigger's regular
+    // `wire:click` (the FilePond upload modal) never fires when the inline
+    // flow takes over — and remains the natural fallback everywhere else
+    // (media library page, no inline config, script not loaded).
     document.addEventListener('click', (event) => {
-        const opener = event.target instanceof Element ? event.target.closest(OPEN_DIALOG_SELECTOR) : null
+        const opener = event.target instanceof Element
+            ? event.target.closest(`${OPEN_DIALOG_SELECTOR}, ${TRIGGER_SELECTOR}`)
+            : null
 
         if (!opener) {
             return
         }
 
-        const zone = opener.closest(ZONE_SELECTOR)
-        const config = zone ? inlineConfigFromZone(zone) : null
+        const configElement = opener.closest(CONFIG_ELEMENT_SELECTOR)
+        const config = configElement ? inlineConfigFromElement(configElement) : null
 
         if (!config) {
             return
         }
 
-        openInlineUploadDialog(wireFromElement(opener), config, zone)
-    })
+        event.preventDefault()
+        event.stopPropagation()
 
-    // Click handler for upload action buttons when inline uploads are
-    // enabled: inside a zone with an inline config the native file dialog
-    // opens; elsewhere (e.g. the media library page) the original FilePond
-    // upload modal is mounted as fallback.
-    window.mleUploadTriggerClicked = (event) => {
-        const trigger = event.currentTarget instanceof Element ? event.currentTarget : null
-
-        if (!trigger) {
-            return
-        }
-
-        const zone = trigger.closest(ZONE_SELECTOR)
-        const config = zone ? inlineConfigFromZone(zone) : null
-
-        if (config) {
-            openInlineUploadDialog(wireFromElement(trigger), config, zone)
-
-            return
-        }
-
-        const mountContext = decodeJsonAttribute(trigger.getAttribute(MOUNT_CONTEXT_ATTRIBUTE)) ?? {}
-
-        wireFromElement(trigger)?.mountAction('upload', {}, mountContext)
-    }
+        openInlineUploadDialog(wireFromElement(opener), config, configElement)
+    }, true)
 
     // ------------------------------------- FilePond handoff (fallback flows)
 
@@ -745,13 +830,13 @@
     }
 
     const waitForNewPondInput = (knownPondInputs, files) => {
-        clearInterval(pondPollTimer)
-
         const startedAt = Date.now()
 
-        pondPollTimer = setInterval(() => {
+        // One timer per call — a second fallback drop must not cancel the
+        // first drop's still-running poll.
+        const pollTimer = setInterval(() => {
             if (Date.now() - startedAt > POND_POLL_TIMEOUT_MS) {
-                clearInterval(pondPollTimer)
+                clearInterval(pollTimer)
 
                 return
             }
@@ -764,7 +849,7 @@
                 return
             }
 
-            clearInterval(pondPollTimer)
+            clearInterval(pollTimer)
             injectFilesIntoPondInput(input, files)
         }, POND_POLL_INTERVAL_MS)
     }
@@ -781,17 +866,22 @@
         if (!zone) {
             clearHighlights()
 
+            // Outside every zone (and every foreign drop target — those
+            // prevented the default themselves): signal "no drop here", so a
+            // release a few pixels beside a zone can never navigate the tab
+            // to the dropped file and discard the form.
+            if (!event.defaultPrevented) {
+                event.preventDefault()
+                event.dataTransfer.dropEffect = 'none'
+            }
+
             return
         }
 
         event.preventDefault()
         event.dataTransfer.dropEffect = 'copy'
 
-        if (!zone.classList.contains(ACTIVE_CLASS)) {
-            clearHighlights()
-            zone.classList.add(ACTIVE_CLASS)
-        }
-
+        setActiveZone(zone)
         setActiveFolderTile(folderTileFromEvent(event, zone))
     })
 
@@ -824,7 +914,18 @@
 
         clearHighlights()
 
-        if (!zone || !isFileDrag(event)) {
+        if (!isFileDrag(event)) {
+            return
+        }
+
+        if (!zone) {
+            // Safety net against the browser's default drop action (leaving
+            // the page to open the file) — unless a foreign drop target
+            // already handled the event.
+            if (!event.defaultPrevented) {
+                event.preventDefault()
+            }
+
             return
         }
 
@@ -833,6 +934,13 @@
         const files = Array.from(event.dataTransfer?.files ?? [])
 
         if (!files.length) {
+            return
+        }
+
+        // Drops directly onto a FilePond element are ingested by FilePond
+        // itself (its drop handler ran already and does not stop
+        // propagation) — injecting again would add every file twice.
+        if (event.target instanceof Element && event.target.closest(POND_ROOT_SELECTOR)) {
             return
         }
 

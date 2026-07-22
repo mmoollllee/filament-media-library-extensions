@@ -6,46 +6,129 @@ namespace Mmoollllee\FilamentMediaLibraryExtensions\Support;
 
 use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Str;
 use Livewire\Component;
 use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
 use RalphJSmit\Filament\Explore\Data\FileData;
+use RalphJSmit\Filament\Explore\Drivers\Driver;
 use RalphJSmit\Filament\Explore\Enums\FileType;
 use RalphJSmit\Filament\Explore\Filament\Actions\SelectFileAction;
 use RalphJSmit\Filament\Explore\Filament\Forms\Components\FilePicker;
+use Throwable;
 
 class PickerUploads
 {
     /**
      * Livewire property path holding a picker's pending inline uploads,
-     * keyed by a client-generated uuid per file. Lives as a sibling of the
-     * field inside the form data array (`data.mle_pending_uploads.<field>`),
-     * so no schema component owns it: `Schema::getState()` ignores it and it
-     * never leaks into saved models. (Inside a Repeater item the whole item
-     * state is dehydrated — do not use the inline upload there.)
+     * keyed by a client-generated uuid per file. The bucket is anchored at
+     * the picker's ROOT schema state path (`data.mle_pending_uploads.<field>`,
+     * `mountedActions.0.data.mle_pending_uploads.<field>`, …), so it sits
+     * outside every dehydrating subtree: `Schema::getState()` ignores it and
+     * it never leaks into saved models — also for pickers nested in Repeater
+     * items or Builder blocks (their relative path becomes the bucket name).
+     * Numeric path segments (`mountedActions.0…`) are preserved verbatim.
      */
     public static function pendingUploadsStatePath(FilePicker $component): string
     {
-        $segments = explode('.', $component->getStatePath());
-        $fieldName = array_pop($segments);
+        $statePath = $component->getStatePath();
+        $rootStatePath = $component->getRootContainer()->getStatePath();
 
-        return implode('.', array_filter([...$segments, 'mle_pending_uploads', $fieldName]));
+        $relativeStatePath = filled($rootStatePath) && str_starts_with($statePath, "{$rootStatePath}.")
+            ? Str::after($statePath, "{$rootStatePath}.")
+            : $statePath;
+
+        return implode('.', array_filter(
+            [$rootStatePath, 'mle_pending_uploads', str_replace('.', '_', $relativeStatePath)],
+            fn (string $segment): bool => $segment !== '',
+        ));
     }
 
     /**
-     * Consume (read and clear) the pending inline uploads at the given
-     * Livewire property path.
+     * Consume (read and clear) pending inline uploads at the given Livewire
+     * property path. When `$onlyUploadKeys` is given, only those entries are
+     * consumed — a settling upload batch must not sweep files of a
+     * concurrently uploading batch (which may target another folder).
      *
+     * @param  list<string>|null  $onlyUploadKeys
      * @return Collection<int, TemporaryUploadedFile>
      */
-    public static function consumePendingUploads(Component $livewire, string $pendingUploadsStatePath): Collection
+    public static function consumePendingUploads(Component $livewire, string $pendingUploadsStatePath, ?array $onlyUploadKeys = null): Collection
     {
-        $pendingUploads = collect(Arr::wrap(data_get($livewire, $pendingUploadsStatePath)))
-            ->filter(fn (mixed $file): bool => $file instanceof TemporaryUploadedFile)
-            ->values();
+        $allPendingUploads = collect(Arr::wrap(data_get($livewire, $pendingUploadsStatePath)));
 
-        data_set($livewire, $pendingUploadsStatePath, []);
+        $consumedUploads = $allPendingUploads
+            ->filter(fn (mixed $file, int|string $uploadKey): bool => $file instanceof TemporaryUploadedFile
+                && ($onlyUploadKeys === null || in_array((string) $uploadKey, $onlyUploadKeys, true)));
 
-        return $pendingUploads;
+        data_set(
+            $livewire,
+            $pendingUploadsStatePath,
+            $onlyUploadKeys === null ? [] : $allPendingUploads->except($consumedUploads->keys())->all(),
+        );
+
+        return $consumedUploads->values();
+    }
+
+    /**
+     * Nearest `SelectFileAction` below the currently running action on the
+     * mounted-action stack — robust against additional modals (preview, move,
+     * file info) mounted in between.
+     *
+     * @return array{0: int, 1: SelectFileAction}|null
+     */
+    public static function findParentSelectFileAction(Component $livewire): ?array
+    {
+        $mountedActions = $livewire->getMountedActions();
+
+        for ($index = count($mountedActions) - 2; $index >= 0; $index--) {
+            if ($mountedActions[$index] instanceof SelectFileAction) {
+                return [$index, $mountedActions[$index]];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Resolve a client-supplied drop-target folder key scope-safely: through
+     * the driver's scoped `findFile()` (visibility) and constrained to the
+     * picker's scoped folder. Malformed keys (the vendor driver throws for
+     * wrong-type or unparseable keys instead of returning null) resolve to
+     * null — the caller falls back to its default target.
+     */
+    public static function resolveDropTargetFolder(Driver $driver, mixed $folderKey, ?FileData $scopedFolder): ?FileData
+    {
+        if (! is_string($folderKey) || blank($folderKey)) {
+            return null;
+        }
+
+        try {
+            $folder = $driver->findFile(FileType::Folder, $folderKey);
+        } catch (Throwable) {
+            return null;
+        }
+
+        if (! $folder || ! static::folderIsWithinScope($folder, $scopedFolder)) {
+            return null;
+        }
+
+        return $folder;
+    }
+
+    /**
+     * Accepted mimetype patterns effectively governing a picker's uploads:
+     * the field-level types, or — matching the vendor `UploadAction` — the
+     * driver's types when the field defines none.
+     *
+     * @return Collection<int, string>
+     */
+    public static function effectiveAcceptedFileTypes(FilePicker $component): Collection
+    {
+        $acceptedFileTypes = $component->getAcceptedFileTypes();
+
+        return $acceptedFileTypes->isNotEmpty()
+            ? $acceptedFileTypes
+            : $component->getDriver()->getAcceptedFileTypes();
     }
 
     /**
