@@ -25,6 +25,35 @@ use RalphJSmit\Filament\MediaLibrary\Filament\Forms\Components\MediaPicker;
 
 class FilamentMediaLibraryExtensionsServiceProvider extends ServiceProvider
 {
+    /**
+     * Column ladder for the file grid of every MediaPicker. Tiles are square
+     * and stretch to their column, so the vendor default (one column on a
+     * single-file field) renders a preview as tall as the field is wide — a
+     * form with three image fields turns into three full-width photos.
+     *
+     * Keys are Tailwind CONTAINER breakpoints: the grid is a query container,
+     * so the count follows the FIELD width, not the viewport, which keeps
+     * tiles at roughly 6–9rem wherever the field sits. The ladder is the
+     * vendor's own, shifted so that narrow fields get thumbnails instead of
+     * one giant tile.
+     *
+     * Deliberately not a config flag: an app overrides it in its own service
+     * provider with `MediaPicker::configureUsing(fn ($picker) =>
+     * $picker->gridColumns(…))` — `null` restores the vendor default — or per
+     * field via `->gridColumns(…)`. Both run after this one.
+     */
+    protected const PREVIEW_COLUMNS = [
+        'default' => 2,
+        '@xs' => 3,
+        '@lg' => 4,
+        '@2xl' => 5,
+        '@3xl' => 6,
+        '@4xl' => 7,
+        '@5xl' => 8,
+        '@6xl' => 9,
+        '@7xl' => 10,
+    ];
+
     public function register(): void
     {
         $this->mergeConfigFrom(
@@ -57,13 +86,17 @@ class FilamentMediaLibraryExtensionsServiceProvider extends ServiceProvider
     }
 
     /**
-     * Field-level extensions: the extended preview on file tiles, the "Upload
-     * files" action next to "Choose files" (rendered by the package view),
-     * and the drag-and-drop marker attribute for the drop zone script.
+     * Field-level extensions: the thumbnail-sized file grid, the extended
+     * preview on file tiles, the "Upload files" action next to "Choose files"
+     * (rendered by the package view), and the drag-and-drop marker attribute
+     * for the drop zone script.
      */
     protected function configureMediaPicker(): void
     {
         MediaPicker::configureUsing(function (MediaPicker $component): void {
+            // Runs at make() time, so a field's own ->gridColumns() still wins.
+            $component->gridColumns(static::PREVIEW_COLUMNS);
+
             if (config('filament-media-library-extensions.media_picker_preview')) {
                 $component->modifyPreviewActionUsing(fn (): MediaPickerPreviewAction => MediaPickerPreviewAction::make());
             }

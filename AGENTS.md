@@ -20,6 +20,7 @@ through `configureUsing()`, a driver trait, a copied field view and one JS asset
 | Auto-select fresh uploads | `auto_select_uploads` | `CreatedFilesCollector` + `UploadAction::after()` |
 | Extended preview | `media_picker_preview` | `MediaPickerPreviewAction` via driver trait |
 | Slim tile actions | `slim_tile_actions` | `HasMediaLibraryExtensions::getFileActions()` |
+| Thumbnail-sized previews | — (always on) | `PREVIEW_COLUMNS` in `configureMediaPicker()` |
 
 ## Non-negotiable invariants
 
