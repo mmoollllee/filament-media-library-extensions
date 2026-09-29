@@ -1,8 +1,10 @@
 {{--
     Copy of `filament-explore::filament.forms.components.file-picker`
     (ralphjsmit/laravel-filament-explore v1.1.2), extended with the `upload`
-    action rendered next to the select action. Re-diff against the original
-    view when updating the explore package.
+    action rendered next to the select action. The actions come first, right
+    under the label, and the chosen files below them, so pickers side by side
+    keep their buttons in one line whether or not they hold files. Re-diff
+    against the original view when updating the explore package.
 --}}
 @php
     use Illuminate\View\ComponentAttributeBag;
@@ -58,8 +60,36 @@
         })"
         {{ $getExtraAttributeBag()->merge(filled($mleInlineFieldConfig) ? ['data-mle-inline-field' => $mleInlineFieldConfig] : []) }}
     >
+        @php
+            $selectFileAction = $getAction('select_file');
+            $uploadAction = $getAction('upload');
+            $clearAction = $getAction('clear');
+        @endphp
+
+        <div class="flex flex-row flex-wrap items-center gap-x-4 gap-y-2">
+            @if ($selectFileAction->isVisible())
+                {{ $selectFileAction }}
+            @endif
+
+            @if (filled($mleInlineFieldConfig))
+                <x-filament::button
+                    color="gray"
+                    type="button"
+                    data-mle-inline-open
+                >
+                    {{ __('filament-media-library-extensions::actions.media_picker_upload.label') }}
+                </x-filament::button>
+            @elseif ($uploadAction?->isVisible())
+                {{ $uploadAction }}
+            @endif
+
+            @if ($clearAction->isVisible())
+                {{ $clearAction }}
+            @endif
+        </div>
+
         @if ($isBulkSelectable && $state)
-            <div class="flex flex-row flex-wrap items-center justify-between gap-y-1">
+            <div class="mt-4 flex flex-row flex-wrap items-center justify-between gap-y-1">
                 <div class="flex flex-row items-center gap-2">
                     <p
                         class="text-xs font-medium text-gray-500 uppercase"
@@ -104,17 +134,26 @@
         <div
             x-show="state != null"
             x-ref="files"
-            class="mt-2"
+            class="mt-4"
         >
             {{ $getChildSchema($field::FILES_SCHEMA_KEY) }}
         </div>
         <p
-            class="text-gray-500"
+            class="mt-2 text-gray-500"
             x-show="state == null || (Array.isArray(state) && state.length === 0)"
             x-cloak
         >
             {{ $getEmptyStateHeading() }}
         </p>
+
+        @if (filled($mleInlineFieldConfig))
+            {{-- Fallback host for upload ghost tiles when the picker shows no files yet. --}}
+            <div
+                class="mle-inline-uploads mt-4"
+                data-mle-ghost-fallback
+                wire:ignore
+            ></div>
+        @endif
 
         @if ($isBulkSelectable && $state)
             <div
@@ -182,41 +221,5 @@
             </div>
         @endif
 
-        @php
-            $selectFileAction = $getAction('select_file');
-            $uploadAction = $getAction('upload');
-            $clearAction = $getAction('clear');
-        @endphp
-
-        @if (filled($mleInlineFieldConfig))
-            {{-- Fallback host for upload ghost tiles when the picker shows no files yet. --}}
-            <div
-                class="mle-inline-uploads mt-4"
-                data-mle-ghost-fallback
-                wire:ignore
-            ></div>
-        @endif
-
-        <div class="mt-4 flex flex-row gap-4">
-            @if ($selectFileAction->isVisible())
-                {{ $selectFileAction }}
-            @endif
-
-            @if (filled($mleInlineFieldConfig))
-                <x-filament::button
-                    color="gray"
-                    type="button"
-                    data-mle-inline-open
-                >
-                    {{ __('filament-media-library-extensions::actions.media_picker_upload.label') }}
-                </x-filament::button>
-            @elseif ($uploadAction?->isVisible())
-                {{ $uploadAction }}
-            @endif
-
-            @if ($clearAction->isVisible())
-                {{ $clearAction }}
-            @endif
-        </div>
     </div>
 </x-dynamic-component>

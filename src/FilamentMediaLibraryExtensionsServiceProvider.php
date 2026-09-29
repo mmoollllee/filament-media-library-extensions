@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Mmoollllee\FilamentMediaLibraryExtensions;
 
+use Filament\Actions\Action;
 use Filament\Support\Facades\FilamentAsset;
 use Illuminate\Support\Collection;
 use Illuminate\Support\ServiceProvider;
@@ -96,6 +97,10 @@ class FilamentMediaLibraryExtensionsServiceProvider extends ServiceProvider
         MediaPicker::configureUsing(function (MediaPicker $component): void {
             // Runs at make() time, so a field's own ->gridColumns() still wins.
             $component->gridColumns(static::PREVIEW_COLUMNS);
+
+            // The explore package leaves "Clear" unlabelled, so it reads the
+            // action's name in every language; a field's own modifier still wins.
+            $component->modifyClearActionUsing(fn (Action $action): Action => $action->label(__('filament-media-library-extensions::actions.media_picker_clear.label')));
 
             if (config('filament-media-library-extensions.media_picker_preview')) {
                 $component->modifyPreviewActionUsing(fn (): MediaPickerPreviewAction => MediaPickerPreviewAction::make());

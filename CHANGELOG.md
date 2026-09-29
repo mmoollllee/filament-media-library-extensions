@@ -5,6 +5,19 @@ All notable changes to `mmoollllee/filament-media-library-extensions` will be do
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Actions above the chosen files** — the field's "Choose files", "Upload
+  files" and "Clear" now sit right under the label, with the chosen files (or
+  the empty-state line) below them, so pickers side by side keep their buttons
+  in one line whether or not they hold files. A narrow column wraps the row.
+- **"Clear" is labelled** — the explore package leaves the action unlabelled,
+  so it read "Clear" in every language; it now takes
+  `actions.media_picker_clear.label` (de: "Auswahl entfernen"). A field's own
+  `modifyClearActionUsing()` still wins.
+
 ## [0.2.0] — Thumbnail-sized previews
 
 ### Added
